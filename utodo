@@ -6,6 +6,7 @@ import pango
 import time
 import re
 import glob
+import gobject
 fnmatch = glob.fnmatch.fnmatch
 import sys
 import os
@@ -30,7 +31,7 @@ def add_key_binding(widget, keyname, callback):
 	accelgroup.connect_group(key, modifier, gtk.ACCEL_VISIBLE, callback)
 	widget.add_accel_group(accelgroup)
 
-class gtkScrolledWidget(gtk.ScrolledWindow):
+class ScrolledWidget(gtk.ScrolledWindow):
 	def __init__(self, widget):
 		super(self.__class__, self).__init__()
 		self.inner_widget = widget
@@ -43,6 +44,61 @@ class gtkScrolledWidget(gtk.ScrolledWindow):
 			self.add_with_viewport(self.inner_widget)
 	def get_inner_widget(self):
 		return self.inner_widget
+
+class TextBuffer(gtk.TextBuffer):
+	def append(self, content):
+		self.insert(self.get_end_iter(), content)
+	def clear(self):
+		return self.delete(self.get_start_iter(), self.get_end_iter())
+	def get_text_all(self):
+		return self.get_text(self.get_start_iter(), self.get_end_iter(), include_hidden_chars=True)
+
+class Calendar(gtk.Calendar):
+	_marks = {}
+	__gsignals__ = {
+		'marks-changed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()),
+	}
+	def __init__(self):
+		super(self.__class__, self).__init__()
+		self.set_display_options(self.get_display_options() | gtk.CALENDAR_WEEK_START_MONDAY)
+		self.on_paging()
+		self.connect('day-selected-double-click', self.on_mark)
+		self.connect('month-changed', self.on_paging)
+	def gotoday(self):
+		now = time.localtime()
+		self.select_month(now.tm_mon - 1, now.tm_year)
+		self.select_day(now.tm_mday)
+	def get_date(self):
+		y, m, d = super(self.__class__, self).get_date()
+		return y, m+1, d
+	def set_marks(self, marks):
+		self._marks = {}
+		for mark in marks:
+			self._marks[tuple(map(int, mark.split('-')))] = True
+		self.on_paging()
+	def get_marks(self):
+		response = []
+		for year, month, day in self._marks.keys():
+			response.append('%04d-%02d-%02d' % (year, month, day))
+		return response
+	def on_mark(self, *X):
+		c_year, c_month, c_day = self.get_date()
+		marked = False
+		for year, month, day in self._marks.keys():
+			if year == c_year and month == c_month and c_day == day:
+				marked = True
+				del self._marks[(year, month, day)]
+		if not marked:
+			self._marks[(c_year, c_month, c_day)] = True
+		self.on_paging()
+		self.emit('marks-changed')
+	def on_paging(self, *X):
+		self.clear_marks()
+		self.select_day(0)
+		c_year, c_month, c_day = self.get_date()
+		for year, month, day in self._marks:
+			if (year == 0 or year == c_year) and month == c_month:
+				super(self.__class__, self).mark_day(day)
 
 def add_treeview_columns(treeview, columns):
 	for col_title, col_attr, col_num in columns:
@@ -124,8 +180,33 @@ def load_tasklist():
 		task_line_markup = glib.markup_escape_text(task_text)
 		tasklist.append(None, [task_line_text, task_line_markup, task_text])
 
+
 def load_task_text(text):
 	task_text_buffer.set_text(text)
+	parse_task_text(text)
+
+def month_name_to_number(m):
+	monthabbrevations = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+	try: m = monthabbrevations[m[0:3].lower()]
+	except KeyError: pass
+	return m
+
+def parse_task_text(text):
+	calendar_marks = []
+	re_months = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
+	for y, m, d in re.findall(r'\b([0-9]{4})-(0?[1-9]|1[0-2]|' + re_months + r')-(0?[1-9]|[12][0-9]|3[01])\b', text, re.I):
+		calendar_marks.append('%d-%d-%d' % (int(y), int(month_name_to_number(m)), int(d)))
+	for m, d in re.findall(r'\b(' + re_months + r')(?:-|\s+)(0?[1-9]|[12][0-9]|3[01])\b', text, re.I):
+		calendar_marks.append('0-%d-%d' % (int(month_name_to_number(m)), int(d)))
+	calendar.set_marks(calendar_marks)
+	calendar.gotoday()
+	if calendar_marks:
+		calendar.show()
+	else:
+		calendar.hide()
+
+def on_calendar_marks_changed(*X):
+	pass
 
 def on_tasklist_selection_change(selection):
 	model, iterpaths = selection.get_selected_rows()
@@ -206,6 +287,8 @@ box1 = gtk.HBox()
 paned1 = gtk.HPaned()
 paned2 = gtk.HPaned()
 box2 = gtk.VBox()
+box3 = gtk.VBox()
+box4 = gtk.HBox()
 
 try: main_win.resize(*map(int, getprops('layout/window/size/width', 'layout/window/size/height')))
 except (ValueError, TypeError): pass
@@ -229,6 +312,10 @@ savedsearches_view.set_headers_clickable(True)
 savedsearches_selection = savedsearches_view.get_selection()
 savedsearches_selection.set_mode(gtk.SELECTION_MULTIPLE)
 
+searchbox = gtk.Entry()
+searchbox.set_text(Props.get('field/search/text', ''))
+searchbox.connect('changed', on_searchbox_change)
+
 tasklist = gtk.TreeStore(str, str, str)
 tasklist_filtered = tasklist.filter_new()
 tasklist_filtered.set_visible_func(tasklist_filterer)
@@ -242,14 +329,11 @@ tasklist_selection = tasklist_view.get_selection()
 tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
 tasklist_selection.connect('changed', on_tasklist_selection_change)
 
-
 task_text_buffer = gtk.TextBuffer()
 task_text_view = gtk.TextView(buffer=task_text_buffer)
 
-searchbox = gtk.Entry()
-searchbox.set_text(Props.get('field/search/text', ''))
-searchbox.connect('changed', on_searchbox_change)
-
+calendar = Calendar()
+calendar.connect('marks-changed', on_calendar_marks_changed)
 
 add_key_binding(main_win, '<Control>q', lambda *X: main_quit())
 main_win.connect('delete-event', lambda *X: main_quit())
@@ -257,13 +341,17 @@ main_win.connect('delete-event', lambda *X: main_quit())
 
 main_win.add(box1)
 box1.pack_start(paned1)
-paned1.pack1(gtkScrolledWidget(savedsearches_view))
+paned1.pack1(ScrolledWidget(savedsearches_view))
 paned1.pack2(paned2)
 paned2.pack1(box2)
-paned2.pack2(gtkScrolledWidget(task_text_view))
+paned2.pack2(box3)
+box3.pack_start(ScrolledWidget(task_text_view))
+box3.pack_start(box4, expand=False)
+box4.pack_start(calendar)
 box2.pack_start(searchbox, expand=False)
-box2.pack_start(gtkScrolledWidget(tasklist_view))
+box2.pack_start(ScrolledWidget(tasklist_view))
 
 main_win.show_all()
+calendar.hide()
 searchbox.grab_focus()
 gtk.main()
