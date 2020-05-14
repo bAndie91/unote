@@ -1,0 +1,175 @@
+#!/usr/bin/env python
+
+import gtk
+import glib
+import pango
+import time
+import re
+
+def add_key_binding(widget, keyname, callback):
+	accelgroup = gtk.AccelGroup()
+	key, modifier = gtk.accelerator_parse(keyname)
+	accelgroup.connect_group(key, modifier, gtk.ACCEL_VISIBLE, callback)
+	widget.add_accel_group(accelgroup)
+
+class gtkScrolledWidget(gtk.ScrolledWindow):
+	def __init__(self, widget):
+		super(self.__class__, self).__init__()
+		self.inner_widget = widget
+		self.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
+		self.add_with_viewport(self.inner_widget)
+	def get_inner_widget(self):
+		return self.inner_widget
+
+def add_treeview_columns(treeview, columns):
+	for col_title, col_attr, col_num in columns:
+		tvc = gtk.TreeViewColumn()
+		tvc.set_title(col_title)
+		cr_txt = gtk.CellRendererText()
+		tvc.pack_start(cr_txt, True)
+		tvc.add_attribute(cr_txt, col_attr, col_num)
+		treeview.append_column(tvc)
+
+def main_quit():
+	gtk.main_quit()
+
+def _(s):
+	return s
+
+def program_start(widget, event):
+	widget.disconnect(start_event_handle)
+	load_tasklist()
+
+def load_task_texts():
+	for text in "task-1\n#tag1 #tag2\ntask description", "task-2\n#tag1 #tag3\ntask description iii", "task-3\n#tag3 #tag3\ntask description iv", "task-4\n#tag2\ntask description v":
+		yield text
+
+def load_tasklist():
+	tasklist.clear()
+	for task_text in load_task_texts():
+		task_line_text = task_text.split("\n", 1)[0]
+		task_line_markup = glib.markup_escape_text(task_text)
+		tasklist.append(None, [task_line_text, task_line_markup, task_text])
+
+def load_task_text(text):
+	task_text_buffer.set_text(text)
+
+def on_tasklist_selection_change(selection):
+	model, iterpaths = selection.get_selected_rows()
+	for iterpath in iterpaths:
+		treeiter = model.get_iter(iterpath)
+		task_text = model[treeiter][2]
+		load_task_text(task_text)
+
+def timer_once(sec, func, func_args=()):
+	iden = func.__name__
+	if Timers.has_key(iden):
+		glib.source_remove(Timers[iden])
+		del Timers[iden]
+	if func is not None:
+		Timers[iden] = glib.timeout_add(int(sec*1000), timer_call, (func, func_args))
+
+def timer_call(data):
+	func = data[0]
+	args = data[1]
+	func(*args)
+	return False
+
+def on_searchbox_change(*x):
+	timer_once(0.5, filter_tasklist)
+
+def filter_tasklist():
+	tasklist_filtered.refilter()
+
+def tasklist_filterer(model, treeiter):
+	query = searchbox.get_text()
+	query = query.strip()
+	if query == '':
+		return True
+	task_text = model[treeiter][2]
+	query_match = False
+	if task_text is not None:
+		for query_alternative in re.split(r'\s*,\s*', query):
+			query_alternative = query_alternative.strip()
+			if query_alternative == '':
+				continue
+			alternative_match = True
+			query_clauses = re.split(r'(?:\bNOT\b|!)', query_alternative, 1, re.I)
+			if len(query_clauses) == 1:
+				query_positive = query_clauses[0]
+				query_negative = ''
+			else:
+				query_positive, query_negative = query_clauses
+			for query_clause, positive_match in (query_positive, True), (query_negative, False):
+				for query_word in re.split(r'\s+', query_clause):
+					if query_word == '':
+						continue
+					word_match = model[treeiter][2].find(query_word) > -1
+					if (positive_match and not word_match) or (not positive_match and word_match):
+						alternative_match = False
+						break
+				if not alternative_match:
+					break
+			if alternative_match:
+				query_match = True
+				break
+	return query_match
+
+
+
+Timers = {}
+
+main_win = gtk.Window()
+box1 = gtk.HBox()
+paned1 = gtk.HPaned()
+paned2 = gtk.HPaned()
+box2 = gtk.VBox()
+
+start_event_handle = main_win.connect('map-event', program_start)
+
+savedsearches = gtk.TreeStore(str)
+savedsearches_view = gtk.TreeView(savedsearches)
+add_treeview_columns(savedsearches_view, [(_("Search"), 'text', 0)])
+savedsearches_view.set_reorderable(True)
+savedsearches_view.set_headers_clickable(True)
+
+savedsearches_selection = savedsearches_view.get_selection()
+savedsearches_selection.set_mode(gtk.SELECTION_MULTIPLE)
+
+tasklist = gtk.TreeStore(str, str, str)
+tasklist_filtered = tasklist.filter_new()
+tasklist_filtered.set_visible_func(tasklist_filterer)
+
+tasklist_view = gtk.TreeView(tasklist_filtered)
+add_treeview_columns(tasklist_view, [(_("Task"), 'text', 0)])
+tasklist_view.set_reorderable(True)
+tasklist_view.set_headers_clickable(True)
+
+tasklist_selection = tasklist_view.get_selection()
+tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
+tasklist_selection.connect('changed', on_tasklist_selection_change)
+
+
+
+task_text_buffer = gtk.TextBuffer()
+task_text_view = gtk.TextView(buffer=task_text_buffer)
+
+searchbox = gtk.Entry()
+searchbox.connect('changed', on_searchbox_change)
+
+
+add_key_binding(main_win, '<Control>q', lambda *x: main_quit())
+main_win.connect('delete-event', lambda *x: main_quit())
+
+
+main_win.add(box1)
+box1.pack_start(paned1)
+paned1.pack1(gtkScrolledWidget(savedsearches_view))
+paned1.pack2(paned2)
+paned2.pack1(box2)
+paned2.pack2(gtkScrolledWidget(task_text_view))
+box2.pack_start(searchbox)
+box2.pack_start(gtkScrolledWidget(tasklist_view))
+
+main_win.show_all()
+gtk.main()
