@@ -69,24 +69,42 @@ def program_start(widget, event):
 	main_win.connect('configure-event', on_window_configure)
 	load_tasklist()
 
-def save_property(propname, propvalue):
-	propfile = os.path.join(xdg.BaseDirectory.save_config_path(APPNAME), 'prop', propname)
-	mkdir(os.path.dirname(propfile))
-	with open(propfile, 'w') as f:
-		f.write(str(propvalue))
+class PropertyTree(dict):
+	savedprops = {}
+	write_delay = 1.0
+	def __getitem__(self, propname):
+		propvalue = super(self.__class__, self).get(propname)
+		if propvalue is None:
+			for d in xdg.BaseDirectory.xdg_config_dirs:
+				path = os.path.join(d, APPNAME, 'prop', propname)
+				if os.path.exists(path):
+					with open(path, 'r') as f:
+						propvalue = f.read()
+				if propvalue is not None:
+					self.savedprops[propname] = propvalue
+					super(self.__class__, self).__setitem__(propname, propvalue)
+					break
+		return propvalue
+	def get(self, propname, default):
+		propvalue = self.__getitem__(propname)
+		if propvalue is None: return default
+		return propvalue
+	def __setitem__(self, propname, propvalue):
+		super(self.__class__, self).__setitem__(propname, propvalue)
+		timer_once(self.write_delay, self._write)
+	def _write(self):
+		for propname, propvalue in self.iteritems():
+			if self.savedprops.get(propname) != propvalue:
+				propfile = os.path.join(xdg.BaseDirectory.save_config_path(APPNAME), 'prop', propname)
+				mkdir(os.path.dirname(propfile))
+				with open(propfile, 'w') as f:
+					f.write(str(self[propname]))
+				self.savedprops[propname] = propvalue
 
 def getprops(*props):
 	values = []
 	for prop in props:
-		value = None
-		for d in xdg.BaseDirectory.xdg_config_dirs:
-			path = os.path.join(d, APPNAME, 'prop', prop)
-			if os.path.exists(path):
-				with open(path, 'r') as f:
-					value = f.read()
-			if value is not None:
-				break
-		values.append(value)
+		values.append(Props[prop])
 	return values
 
 def load_task_texts():
@@ -133,8 +151,9 @@ def timer_call(iden, func, args):
 	func(*args)
 	return False
 
-def on_searchbox_change(*x):
+def on_searchbox_change(*X):
 	timer_once(0.5, filter_tasklist)
+	Props['field/search/text'] = searchbox.get_text()
 
 def filter_tasklist():
 	tasklist_filtered.refilter()
@@ -175,11 +194,12 @@ def tasklist_filterer(model, treeiter):
 
 def on_window_configure(widget, event):
 	for k, v in ('position/x', event.x), ('position/y', event.y), ('size/width', event.width), ('size/height', event.height):
-		save_property('layout/window/%s' % k, v)
+		Props['layout/window/%s' % k] = v
 
 
 
 Timers = {}
+Props = PropertyTree()
 
 main_win = gtk.Window()
 box1 = gtk.HBox()
@@ -197,8 +217,8 @@ try: paned2.set_position(*map(int, getprops('layout/panel/tasklist/width')))
 except (ValueError, TypeError): pass
 
 start_event_handle = main_win.connect('map-event', program_start)
-paned1.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: save_property('layout/panel/savedsearches/width', paned.get_position())))
-paned2.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: save_property('layout/panel/tasklist/width', paned.get_position())))
+paned1.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/savedsearches/width', paned.get_position())))
+paned2.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/tasklist/width', paned.get_position())))
 
 savedsearches = gtk.TreeStore(str)
 savedsearches_view = gtk.TreeView(savedsearches)
@@ -223,16 +243,16 @@ tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
 tasklist_selection.connect('changed', on_tasklist_selection_change)
 
 
-
 task_text_buffer = gtk.TextBuffer()
 task_text_view = gtk.TextView(buffer=task_text_buffer)
 
 searchbox = gtk.Entry()
+searchbox.set_text(Props.get('field/search/text', ''))
 searchbox.connect('changed', on_searchbox_change)
 
 
-add_key_binding(main_win, '<Control>q', lambda *x: main_quit())
-main_win.connect('delete-event', lambda *x: main_quit())
+add_key_binding(main_win, '<Control>q', lambda *X: main_quit())
+main_win.connect('delete-event', lambda *X: main_quit())
 
 
 main_win.add(box1)
@@ -241,8 +261,9 @@ paned1.pack1(gtkScrolledWidget(savedsearches_view))
 paned1.pack2(paned2)
 paned2.pack1(box2)
 paned2.pack2(gtkScrolledWidget(task_text_view))
-box2.pack_start(searchbox)
+box2.pack_start(searchbox, expand=False)
 box2.pack_start(gtkScrolledWidget(tasklist_view))
 
 main_win.show_all()
+searchbox.grab_focus()
 gtk.main()
