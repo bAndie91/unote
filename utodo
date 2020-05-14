@@ -5,6 +5,15 @@ import glib
 import pango
 import time
 import re
+import glob
+fnmatch = glob.fnmatch.fnmatch
+import sys
+import os
+
+
+TODO_DIR = './test-todo.d'
+TODOFILE_EXCLUDES = ['*~', '*.bak']
+
 
 def add_key_binding(widget, keyname, callback):
 	accelgroup = gtk.AccelGroup()
@@ -17,7 +26,12 @@ class gtkScrolledWidget(gtk.ScrolledWindow):
 		super(self.__class__, self).__init__()
 		self.inner_widget = widget
 		self.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
-		self.add_with_viewport(self.inner_widget)
+		def widget_supports_scrolling_internally(w):
+			return any([isinstance(w, klass) for klass in [gtk.TextView, gtk.TreeView, gtk.Layout]])
+		if widget_supports_scrolling_internally(self.inner_widget):
+			self.add(self.inner_widget)
+		else:
+			self.add_with_viewport(self.inner_widget)
 	def get_inner_widget(self):
 		return self.inner_widget
 
@@ -41,8 +55,14 @@ def program_start(widget, event):
 	load_tasklist()
 
 def load_task_texts():
-	for text in "task-1\n#tag1 #tag2\ntask description", "task-2\n#tag1 #tag3\ntask description iii", "task-3\n#tag3 #tag3\ntask description iv", "task-4\n#tag2\ntask description v":
-		yield text
+	for dirpath, dirnames, filenames in os.walk(os.path.expanduser(TODO_DIR), topdown=False, onerror=None, followlinks=True):
+		for filename in filenames:
+			if any([fnmatch(filename, pattern) for pattern in TODOFILE_EXCLUDES]):
+				continue
+			filepath = os.path.join(dirpath, filename)
+			with open(filepath, 'r') as f:
+				text = ''.join(f.readlines())
+				yield text
 
 def load_tasklist():
 	tasklist.clear()
