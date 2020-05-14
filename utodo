@@ -9,11 +9,20 @@ import glob
 fnmatch = glob.fnmatch.fnmatch
 import sys
 import os
+import xdg.BaseDirectory
 
 
+APPNAME = 'utodo'
 TODO_DIR = './test-todo.d'
 TODOFILE_EXCLUDES = ['*~', '*.bak']
 
+
+def mkdir(path):
+	if os.path.exists(path) or path == '':
+		return
+	else:
+		mkdir(os.path.dirname(path))
+		os.mkdir(path)
 
 def add_key_binding(widget, keyname, callback):
 	accelgroup = gtk.AccelGroup()
@@ -45,6 +54,11 @@ def add_treeview_columns(treeview, columns):
 		treeview.append_column(tvc)
 
 def main_quit():
+	# execute outstanding timers
+	for iden in Timers.keys():
+		glib.source_remove(Timers[iden]['handle'])
+		timer_call(iden, Timers[iden]['func'], Timers[iden]['args'])
+	# quit gtk loop
 	gtk.main_quit()
 
 def _(s):
@@ -52,7 +66,28 @@ def _(s):
 
 def program_start(widget, event):
 	widget.disconnect(start_event_handle)
+	main_win.connect('configure-event', on_window_configure)
 	load_tasklist()
+
+def save_property(propname, propvalue):
+	propfile = os.path.join(xdg.BaseDirectory.save_config_path(APPNAME), 'prop', propname)
+	mkdir(os.path.dirname(propfile))
+	with open(propfile, 'w') as f:
+		f.write(str(propvalue))
+
+def getprops(*props):
+	values = []
+	for prop in props:
+		value = None
+		for d in xdg.BaseDirectory.xdg_config_dirs:
+			path = os.path.join(d, APPNAME, 'prop', prop)
+			if os.path.exists(path):
+				with open(path, 'r') as f:
+					value = f.read()
+			if value is not None:
+				break
+		values.append(value)
+	return values
 
 def load_task_texts():
 	for dirpath, dirnames, filenames in os.walk(os.path.expanduser(TODO_DIR), topdown=False, onerror=None, followlinks=True):
@@ -61,7 +96,7 @@ def load_task_texts():
 				continue
 			filepath = os.path.join(dirpath, filename)
 			with open(filepath, 'r') as f:
-				text = ''.join(f.readlines())
+				text = f.read()
 				yield text
 
 def load_tasklist():
@@ -84,14 +119,17 @@ def on_tasklist_selection_change(selection):
 def timer_once(sec, func, func_args=()):
 	iden = func.__name__
 	if Timers.has_key(iden):
-		glib.source_remove(Timers[iden])
+		glib.source_remove(Timers[iden]['handle'])
 		del Timers[iden]
 	if func is not None:
-		Timers[iden] = glib.timeout_add(int(sec*1000), timer_call, (func, func_args))
+		Timers[iden] = {
+			'handle': glib.timeout_add(int(sec*1000), timer_call, iden, func, func_args),
+			'func': func,
+			'args': func_args,
+		}
 
-def timer_call(data):
-	func = data[0]
-	args = data[1]
+def timer_call(iden, func, args):
+	del Timers[iden]
 	func(*args)
 	return False
 
@@ -135,6 +173,10 @@ def tasklist_filterer(model, treeiter):
 				break
 	return query_match
 
+def on_window_configure(widget, event):
+	for k, v in ('position/x', event.x), ('position/y', event.y), ('size/width', event.width), ('size/height', event.height):
+		save_property('layout/window/%s' % k, v)
+
 
 
 Timers = {}
@@ -145,7 +187,18 @@ paned1 = gtk.HPaned()
 paned2 = gtk.HPaned()
 box2 = gtk.VBox()
 
+try: main_win.resize(*map(int, getprops('layout/window/size/width', 'layout/window/size/height')))
+except (ValueError, TypeError): pass
+try: main_win.move(*map(int, getprops('layout/window/position/x', 'layout/window/position/y')))
+except (ValueError, TypeError): pass
+try: paned1.set_position(*map(int, getprops('layout/panel/savedsearches/width')))
+except (ValueError, TypeError): pass
+try: paned2.set_position(*map(int, getprops('layout/panel/tasklist/width')))
+except (ValueError, TypeError): pass
+
 start_event_handle = main_win.connect('map-event', program_start)
+paned1.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: save_property('layout/panel/savedsearches/width', paned.get_position())))
+paned2.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: save_property('layout/panel/tasklist/width', paned.get_position())))
 
 savedsearches = gtk.TreeStore(str)
 savedsearches_view = gtk.TreeView(savedsearches)
