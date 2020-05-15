@@ -28,6 +28,21 @@ def mkdir(path):
 		mkdir(os.path.dirname(path))
 		os.mkdir(path)
 
+def filenameize(s):
+	#s = re.sub(r'(^|/)\.\.(/|$)', '', s)
+	s = re.sub(r'/', '⁄', s)
+	return s
+
+def find_nonexistent_file(directory, preferred_filename):
+	filename = preferred_filename
+	n = 1
+	while True:
+		filepath = os.path.join(directory, filename)
+		if not os.path.exists(filepath): break
+		n += 1
+		filename = '%s (%d)' % (preferred_filename, n)
+	return filepath
+
 def add_key_binding(widget, keyname, callback):
 	accelgroup = gtk.AccelGroup()
 	key, modifier = gtk.accelerator_parse(keyname)
@@ -408,7 +423,7 @@ def on_tasklist_selection_change(selection):
 		treeiter = tasklist.get_iter(iterpath)
 		task_text = tasklist[(treeiter, 'raw_text')]
 		load_taskbody(task_text)
-		taskbody_view.set_data('current-task', treeiter)
+		taskbody_view.set_data('loaded-task-iter', treeiter)
 
 def timer_once(sec, func, func_args=()):
 	iden = func.__name__
@@ -480,13 +495,19 @@ def save_task(treeiter):
 
 def on_taskbody_changed(*X):
 	text = taskbody_buffer.get_text_all()
-	# represent task text in the task list
-	treeiter = taskbody_view.get_data('current-task')
-	if treeiter is None:
-		treeiter = tasklist.append(None, ['', '', ''])
-	tasklist[(treeiter, 'raw_text')] = text
 	# re-parse
 	parse_taskbody(text)
+	# represent task text in the task list
+	treeiter = taskbody_view.get_data('loaded-task-iter')
+	if treeiter is None:
+		# don't save new task until at least one line is entered,
+		# and generate file name from the first line
+		m = re.search(r'^\s*(.+?)\n', text)
+		if not m: return
+		first_line = m.group(1)
+		filepath = find_nonexistent_file(TODO_DIR, filenameize(first_line))
+		treeiter = tasklist.append(None, ['', '', filepath])
+	tasklist[(treeiter, 'raw_text')] = text
 	# schedule save
 	timer_once(5.0, save_task, (treeiter,))
 
@@ -584,6 +605,12 @@ def taskbody_remove_last(s):
 	taskbody_buffer.set_text(newtext)
 	taskbody_buffer.enable_events()
 
+def act_new_task():
+	tasklist_selection.unselect_all()
+	taskbody_view.set_data('loaded-task-iter', None)
+	taskbody_buffer.clear()
+	taskbody_view.grab_focus()
+
 
 Timers = {}
 Props = PropertyTree()
@@ -660,6 +687,8 @@ calendar.connect('mark-added', lambda X, date: taskbody_append_line(date))
 calendar.connect('mark-removed', lambda X, date: taskbody_remove_last(date))
 
 add_key_binding(main_win, '<Control>q', lambda *X: main_quit())
+add_key_binding(main_win, '<Control>f', lambda *X: searchbox.grab_focus())
+add_key_binding(main_win, '<Control>n', lambda *X: act_new_task())
 main_win.connect('delete-event', lambda *X: main_quit())
 
 
