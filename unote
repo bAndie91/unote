@@ -375,7 +375,9 @@ def load_tasklist():
 	for task_text, task_file in load_tasks():
 		task_headline_text = task_text.split("\n", 1)[0]
 		task_headline_markup = glib.markup_escape_text(task_headline_text)
-		tasklist.append(None, [task_headline_markup, task_text, task_file])
+		treeiter = tasklist.append(None, [task_headline_markup, task_text, task_file])
+		if task_file == Props['history/last/opened-task/path']:
+			tasklist_selection.select_path(tasklist.get_path(treeiter))
 
 def on_tasklist_changed(*X):
 	timer_once(0.2, process_tasklist)
@@ -424,6 +426,7 @@ def on_tasklist_selection_change(selection):
 		task_text = tasklist[(treeiter, 'raw_text')]
 		load_taskbody(task_text)
 		taskbody_view.set_data('loaded-task-iter', treeiter)
+		Props['history/last/opened-task/path'] = tasklist[(treeiter, 'file')]
 
 def timer_once(sec, func, func_args=()):
 	iden = func.__name__
