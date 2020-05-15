@@ -109,12 +109,17 @@ class CompletionSuggestionsBox(gtk.TextView):
 	def filter_for(self, word):
 		last_suggestion = self.get_curret_suggestion()
 		self._filterer_word = word
-		self._shown_items = filter(lambda x: x.find(word)>-1, self._all_items)
+		self._shown_items = filter(lambda item: self._filter_func(word, item), self._all_items)
 		idx = -1
 		if last_suggestion is not None:
 			try: idx = self._shown_items.index(last_suggestion)
 			except ValueError: pass
 		self.set_suggestion_index(idx)
+	@staticmethod
+	def _filter_func(query, option):
+		if query == option: return False
+		query_norm = re.sub(r'[^\w-]', '', query, flags=re.I)
+		return option.find(query_norm) > -1
 	def next_suggestion(self):
 		idx = self._suggestion_index + 1
 		if idx >= len(self._shown_items): idx = 0
@@ -497,7 +502,7 @@ def on_taskbody_erase(textbuffer, startiter, enditer):
 def act_taskbody_word(word):
 	if word.startswith('#'):
 		completion_suggestions_box.show()
-		completion_suggestions_box.filter_for(word[1:])
+		completion_suggestions_box.filter_for(word)
 	else:
 		completion_suggestions_box.hide()
 
