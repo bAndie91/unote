@@ -16,7 +16,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
 
-APPNAME = 'utodo'
+APPNAME = 'unote'
 TODO_DIR = './test-todo.d'
 TODOFILE_EXCLUDES = ['*~', '*.bak']
 
@@ -254,13 +254,18 @@ def load_task_texts():
 				text = f.read()
 				yield text, filepath
 
+def get_tags(text):
+	return re.findall(r'(?:^|\s|,)(#[a-z0-9_-]+)', text, re.I)
+
 def load_tasklist():
 	tasklist.clear()
+	AllTags.clear()
 	for task_text, task_file in load_task_texts():
 		task_headline_text = task_text.split("\n", 1)[0]
 		task_headline_markup = glib.markup_escape_text(task_headline_text)
 		tasklist.append(None, [task_headline_markup, task_text, task_file])
-
+		for tag in get_tags(task_text):
+			AllTags[tag] = AllTags.get(tag, 0) + 1
 
 def load_task_text(text):
 	task_text_buffer.handler_block(eventhandle_task_text_changed)
@@ -425,6 +430,7 @@ def task_text_remove_last(s):
 
 Timers = {}
 Props = PropertyTree()
+AllTags = {}
 
 main_win = gtk.Window()
 box1 = gtk.HBox()
