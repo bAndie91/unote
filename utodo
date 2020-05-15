@@ -53,6 +53,30 @@ class TextBuffer(gtk.TextBuffer):
 	def get_text_all(self):
 		return self.get_text(self.get_start_iter(), self.get_end_iter(), include_hidden_chars=True)
 
+class TreeStore(gtk.TreeStore):
+	def __init__(self, columns):
+		self.columns = {}
+		types = []
+		n = 0
+		for col_name, col_type in columns:
+			types.append(col_type)
+			self.columns[col_name] = n
+			n += 1
+			super(self.__class__, self).__init__(*types)
+	def get_column_num(self, col_name):
+		return self.columns.get(col_name)
+	def __getitem__(self, item):
+		if type(item) == tuple:
+			if isinstance(item[1], basestring):
+				return super(self.__class__, self).__getitem__(item[0]).__getitem__(self.get_column_num(item[1]))
+		return super(self.__class__, self).__getitem__(item)
+	def __setitem__(self, item, value):
+		if type(item) == tuple:
+			if isinstance(item[1], basestring):
+				super(self.__class__, self).__getitem__(item[0]).__setitem__(self.get_column_num(item[1]), value)
+				return
+		super(self.__class__, self).__setitem__(item, value)
+
 class Calendar(gtk.Calendar):
 	_marks = {}
 	__gsignals__ = {
@@ -171,18 +195,20 @@ def load_task_texts():
 			filepath = os.path.join(dirpath, filename)
 			with open(filepath, 'r') as f:
 				text = f.read()
-				yield text
+				yield text, filepath
 
 def load_tasklist():
 	tasklist.clear()
-	for task_text in load_task_texts():
-		task_line_text = task_text.split("\n", 1)[0]
-		task_line_markup = glib.markup_escape_text(task_text)
-		tasklist.append(None, [task_line_text, task_line_markup, task_text])
+	for task_text, task_file in load_task_texts():
+		task_headline_text = task_text.split("\n", 1)[0]
+		task_headline_markup = glib.markup_escape_text(task_headline_text)
+		tasklist.append(None, [task_headline_markup, task_text, task_file])
 
 
 def load_task_text(text):
+	task_text_buffer.handler_block(eventhandle_task_text_changed)
 	task_text_buffer.set_text(text)
+	task_text_buffer.handler_unblock(eventhandle_task_text_changed)
 	parse_task_text(text)
 
 def month_name_to_number(m):
@@ -209,11 +235,12 @@ def on_calendar_marks_changed(*X):
 	pass
 
 def on_tasklist_selection_change(selection):
-	model, iterpaths = selection.get_selected_rows()
+	Xmodel, iterpaths = selection.get_selected_rows()
 	for iterpath in iterpaths:
-		treeiter = model.get_iter(iterpath)
-		task_text = model[treeiter][2]
+		treeiter = tasklist.get_iter(iterpath)
+		task_text = tasklist[(treeiter, 'raw_text')]
 		load_task_text(task_text)
+		task_text_view.set_data('current-task', treeiter)
 
 def timer_once(sec, func, func_args=()):
 	iden = func.__name__
@@ -244,7 +271,7 @@ def tasklist_filterer(model, treeiter):
 	query = query.strip()
 	if query == '':
 		return True
-	task_text = model[treeiter][2]
+	task_text = model[(treeiter, 'raw_text')]
 	query_match = False
 	if task_text is not None:
 		for query_alternative in re.split(r'\s*,\s*', query):
@@ -262,7 +289,7 @@ def tasklist_filterer(model, treeiter):
 				for query_word in re.split(r'\s+', query_clause):
 					if query_word == '':
 						continue
-					word_match = model[treeiter][2].find(query_word) > -1
+					word_match = task_text.find(query_word) > -1
 					if (positive_match and not word_match) or (not positive_match and word_match):
 						alternative_match = False
 						break
@@ -277,6 +304,17 @@ def on_window_configure(widget, event):
 	for k, v in ('position/x', event.x), ('position/y', event.y), ('size/width', event.width), ('size/height', event.height):
 		Props['layout/window/%s' % k] = v
 
+def save_task(treeiter):
+	text = tasklist[(treeiter, 'raw_text')]
+	task_file = tasklist[(treeiter, 'file')]
+	with open(task_file, 'w') as f:
+		f.write(text)
+
+def on_task_text_changed(*X):
+	text = task_text_buffer.get_text_all()
+	treeiter = task_text_view.get_data('current-task')
+	tasklist[(treeiter, 'raw_text')] = text
+	timer_once(5.0, save_task, (treeiter,))
 
 
 Timers = {}
@@ -303,9 +341,9 @@ start_event_handle = main_win.connect('map-event', program_start)
 paned1.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/savedsearches/width', paned.get_position())))
 paned2.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/tasklist/width', paned.get_position())))
 
-savedsearches = gtk.TreeStore(str)
+savedsearches = TreeStore([('query', str)])
 savedsearches_view = gtk.TreeView(savedsearches)
-add_treeview_columns(savedsearches_view, [(_("Search"), 'text', 0)])
+add_treeview_columns(savedsearches_view, [(_("Search"), 'text', savedsearches.get_column_num('query'))])
 savedsearches_view.set_reorderable(True)
 savedsearches_view.set_headers_clickable(True)
 
@@ -316,12 +354,12 @@ searchbox = gtk.Entry()
 searchbox.set_text(Props.get('field/search/text', ''))
 searchbox.connect('changed', on_searchbox_change)
 
-tasklist = gtk.TreeStore(str, str, str)
+tasklist = TreeStore([('headline_markup', str), ('raw_text', str), ('file', str)])
 tasklist_filtered = tasklist.filter_new()
 tasklist_filtered.set_visible_func(tasklist_filterer)
 
 tasklist_view = gtk.TreeView(tasklist_filtered)
-add_treeview_columns(tasklist_view, [(_("Task"), 'text', 0)])
+add_treeview_columns(tasklist_view, [(_("Task"), 'markup', tasklist.get_column_num('headline_markup'))])
 tasklist_view.set_reorderable(True)
 tasklist_view.set_headers_clickable(True)
 
@@ -329,8 +367,9 @@ tasklist_selection = tasklist_view.get_selection()
 tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
 tasklist_selection.connect('changed', on_tasklist_selection_change)
 
-task_text_buffer = gtk.TextBuffer()
+task_text_buffer = TextBuffer()
 task_text_view = gtk.TextView(buffer=task_text_buffer)
+eventhandle_task_text_changed = task_text_buffer.connect('changed', on_task_text_changed)
 
 calendar = Calendar()
 calendar.connect('marks-changed', on_calendar_marks_changed)
