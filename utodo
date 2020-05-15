@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 import gtk
 import glib
@@ -11,6 +12,8 @@ fnmatch = glob.fnmatch.fnmatch
 import sys
 import os
 import xdg.BaseDirectory
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
 
 
 APPNAME = 'utodo'
@@ -79,19 +82,58 @@ class TreeStore(gtk.TreeStore):
 
 class Calendar(gtk.Calendar):
 	_marks = {}
+	selected_day = (0, 0, 0)
 	__gsignals__ = {
 		'marks-changed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()),
+		'mark-added': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, (str,)),
+		'mark-removed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, (str,)),
 	}
+	date_format = '%04d-%02d-%02d'
 	def __init__(self):
 		super(self.__class__, self).__init__()
 		self.set_display_options(self.get_display_options() | gtk.CALENDAR_WEEK_START_MONDAY)
-		self.on_paging()
+		# create popup menu
+		self.popup_menu = gtk.Menu()
+		mi = gtk.MenuItem("Go Today")
+		mi.connect('activate', self.gotoday)
+		self.popup_menu.append(mi)
+		self.popup_menu.show_all()
+		# set initial state
+		self.gotoday()
+		self.connect('key-release-event', self.on_key_press_release)
+		self.connect('button-press-event', self.on_mouse_click)
+		self.connect('button-release-event', self.on_mouse_clicked)
 		self.connect('day-selected-double-click', self.on_mark)
 		self.connect('month-changed', self.on_paging)
-	def gotoday(self):
+	def on_mouse_click(self, widget, event):
+		if event.button == 3:
+			self.popup_menu.popup(None, None, None, event.button, event.time)
+			return True  # eat the event
+	def on_mouse_clicked(self, widget, event):
+		if event.button == 1:
+			if self.get_date()[2] != 0:
+				self.on_user_select_day()
+				return False  # let the event pass
+	def on_key_press_release(self, widget, event):
+		c_year, c_month, c_day = self.get_date()
+		if event.keyval == gtk.gdk.keyval_from_name('space'):
+			if c_day == self.selected_day[2]:
+				self.select_day(0)
+				self.selected_day = (0, 0, 0)
+			else:
+				self.on_user_select_day()
+		elif event.keyval == gtk.gdk.keyval_from_name('Page_Up'):
+			date = datetime.strptime('%d-%d'%(c_year,c_month), '%Y-%m') + relativedelta(months=-1)
+			self.select_month(date.month - 1, date.year)
+		elif event.keyval == gtk.gdk.keyval_from_name('Page_Down'):
+			date = datetime.strptime('%d-%d'%(c_year,c_month), '%Y-%m') + relativedelta(months=+1)
+			self.select_month(date.month - 1, date.year)
+	def gotoday(self, *X):
 		now = time.localtime()
 		self.select_month(now.tm_mon - 1, now.tm_year)
 		self.select_day(now.tm_mday)
+		self.selected_day = (now.tm_year, now.tm_mon, now.tm_mday)
+		self.on_paging()
 	def get_date(self):
 		y, m, d = super(self.__class__, self).get_date()
 		return y, m+1, d
@@ -103,17 +145,20 @@ class Calendar(gtk.Calendar):
 	def get_marks(self):
 		response = []
 		for year, month, day in self._marks.keys():
-			response.append('%04d-%02d-%02d' % (year, month, day))
+			response.append(date_format % (year, month, day))
 		return response
 	def on_mark(self, *X):
 		c_year, c_month, c_day = self.get_date()
-		marked = False
+		was_marked = False
 		for year, month, day in self._marks.keys():
 			if year == c_year and month == c_month and c_day == day:
-				marked = True
+				was_marked = True
 				del self._marks[(year, month, day)]
-		if not marked:
+		if was_marked:
+			self.emit('mark-removed', self.date_format % (c_year, c_month, c_day))
+		else:
 			self._marks[(c_year, c_month, c_day)] = True
+			self.emit('mark-added', self.date_format % (c_year, c_month, c_day))
 		self.on_paging()
 		self.emit('marks-changed')
 	def on_paging(self, *X):
@@ -123,6 +168,18 @@ class Calendar(gtk.Calendar):
 		for year, month, day in self._marks:
 			if (year == 0 or year == c_year) and month == c_month:
 				super(self.__class__, self).mark_day(day)
+		if c_year == self.selected_day[0] and c_month == self.selected_day[1]:
+			self.select_day(self.selected_day[2])
+	def on_user_select_day(self, *X):
+		self.selected_day = self.get_date()
+
+class ActionStockMenuItem(gtk.ImageMenuItem):
+	def __init__(self, stock_id=None, accel_group=None, label=None, action=None):
+		super(self.__class__, self).__init__(stock_id=stock_id, accel_group=accel_group)
+		if label is not None:
+			self.set_label(label)
+		if action is not None:
+			self.connect('activate', action)
 
 def add_treeview_columns(treeview, columns):
 	for col_title, col_attr, col_num in columns:
@@ -210,6 +267,7 @@ def load_task_text(text):
 	task_text_buffer.set_text(text)
 	task_text_buffer.handler_unblock(eventhandle_task_text_changed)
 	parse_task_text(text)
+	calendar.gotoday()
 
 def month_name_to_number(m):
 	monthabbrevations = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
@@ -225,14 +283,12 @@ def parse_task_text(text):
 	for m, d in re.findall(r'\b(' + re_months + r')(?:-|\s+)(0?[1-9]|[12][0-9]|3[01])\b', text, re.I):
 		calendar_marks.append('0-%d-%d' % (int(month_name_to_number(m)), int(d)))
 	calendar.set_marks(calendar_marks)
-	calendar.gotoday()
-	if calendar_marks:
+	if calendar_marks or re.search(r'\bdate:', text):
+		if not calendar.get_visible():
+			calendar.gotoday()
 		calendar.show()
 	else:
 		calendar.hide()
-
-def on_calendar_marks_changed(*X):
-	pass
 
 def on_tasklist_selection_change(selection):
 	Xmodel, iterpaths = selection.get_selected_rows()
@@ -312,9 +368,59 @@ def save_task(treeiter):
 
 def on_task_text_changed(*X):
 	text = task_text_buffer.get_text_all()
+	# represent task text in the task list
 	treeiter = task_text_view.get_data('current-task')
 	tasklist[(treeiter, 'raw_text')] = text
+	# re-parse
+	parse_task_text(text)
+	# schedule save
 	timer_once(5.0, save_task, (treeiter,))
+
+def act_change_font(*X):
+	def get_current_font(textview):
+		pctx = textview.get_pango_context()
+		fdsc = pctx.get_font_description()
+		return fdsc.to_string()
+	dlg = gtk.FontSelectionDialog(_("Select Font"))
+	dlg.set_transient_for(main_win)
+	dlg.set_modal(True)
+	dlg.set_font_name(Props['font'] or get_current_font(task_text_view))
+	if dlg.run() == gtk.RESPONSE_OK:
+		font_name = dlg.get_font_name()
+		Props['field/task_text/font'] = font_name
+		task_text_view.modify_font(pango.FontDescription(font_name))
+	dlg.destroy()
+
+def on_task_text_view_menu(Xtextview, menu):
+	pos = 0
+	mi = ActionStockMenuItem(label=_("Default Font…"), stock_id=gtk.STOCK_SELECT_FONT, action=act_change_font)
+	menu.insert(mi, pos)
+	pos += 1
+	menu.insert(gtk.SeparatorMenuItem(), pos)
+	pos += 1
+	menu.show_all()
+
+def task_text_append_line(s):
+	if task_text_buffer.get_text_all()[-1] != '\n': s = '\n' + s
+	if s[-1] != '\n': s = s + '\n'
+	task_text_buffer.append(s)
+
+def str_replace_last(s, f, r):
+	pos = s.rfind(f)
+	if pos == -1: return s
+	return s[0:pos] + r + s[pos+len(f):]
+
+def task_text_remove_last(s):
+	"""removes last occurrance of s from task_text.
+	removes newline if s is a complete line."""
+	text = task_text_buffer.get_text_all()
+	ln = s
+	if ln[0] != '\n': ln = '\n' + ln
+	if ln[-1] != '\n': ln = ln + '\n'
+	newtext = str_replace_last(text, ln, '\n')
+	if newtext == text:
+		newtext = str_replace_last(text, s, '')
+	task_text_buffer.set_text(newtext)
 
 
 Timers = {}
@@ -369,10 +475,14 @@ tasklist_selection.connect('changed', on_tasklist_selection_change)
 
 task_text_buffer = TextBuffer()
 task_text_view = gtk.TextView(buffer=task_text_buffer)
+task_text_view.modify_font(pango.FontDescription(Props['field/task_text/font'] or ''))
 eventhandle_task_text_changed = task_text_buffer.connect('changed', on_task_text_changed)
+task_text_view.connect('populate-popup', on_task_text_view_menu)
+
 
 calendar = Calendar()
-calendar.connect('marks-changed', on_calendar_marks_changed)
+calendar.connect('mark-added', lambda X, date: task_text_append_line(date))
+calendar.connect('mark-removed', lambda X, date: task_text_remove_last(date))
 
 add_key_binding(main_win, '<Control>q', lambda *X: main_quit())
 main_win.connect('delete-event', lambda *X: main_quit())
