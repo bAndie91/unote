@@ -211,6 +211,15 @@ class Calendar(gtk.Calendar):
 				self.selected_day = (0, 0, 0)
 			else:
 				self.on_user_select_day()
+		elif event.keyval in [gtk.gdk.keyval_from_name('Enter'), gtk.gdk.keyval_from_name('Return')]:
+			s_year, s_month, s_day = self.selected_day[:]
+			space_key_event = event.copy()
+			space_key_event.keyval = int(gtk.gdk.keyval_from_name('space'))
+			self.emit('key-press-event', space_key_event)
+			self.emit('key-release-event', space_key_event)
+			self.on_mark()
+			self.selected_day = (s_year, s_month, s_day)
+			self.on_paging()
 		elif event.keyval == gtk.gdk.keyval_from_name('Page_Up'):
 			date = datetime.strptime('%d-%d'%(c_year,c_month), '%Y-%m') + relativedelta(months=-1)
 			self.select_month(date.month - 1, date.year)
