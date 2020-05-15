@@ -57,12 +57,12 @@ class TextBuffer(gtk.TextBuffer):
 	def get_text_all(self):
 		return self.get_text(self.get_start_iter(), self.get_end_iter(), include_hidden_chars=True)
 	def get_buffer_halves(self, textiter):
-		return self.get_slice(self.get_start_iter(), textiter, include_hidden_chars=True), self.get_slice(textiter, self.get_end_iter(), include_hidden_chars=True)
+		return tuple(map(unicode, (self.get_slice(self.get_start_iter(), textiter, include_hidden_chars=True), self.get_slice(textiter, self.get_end_iter(), include_hidden_chars=True))))
 	def get_word_halves(self, textiter, word_re=None):
 		if word_re is None: word_re = r'\w'
 		text_before, text_after = self.get_buffer_halves(textiter)
-		first_half = re.search(word_re + r'*\Z', unicode(text_before), re.U).group(0)
-		second_half = re.search(r'^'+word_re+r'*', unicode(text_after), re.U).group(0)
+		first_half = re.search(word_re + r'*\Z', text_before, re.U).group(0)
+		second_half = re.search(r'^'+word_re+r'*', text_after, re.U).group(0)
 		return first_half, second_half
 	def get_word_boundaries(self, textiter, word_re=None):
 		text_before, text_after = self.get_buffer_halves(textiter)
@@ -71,6 +71,10 @@ class TextBuffer(gtk.TextBuffer):
 		start_offset = cursor_offset - len(word_first_half)
 		end_offset = cursor_offset + len(word_second_half)
 		return self.get_iter_at_offset(start_offset), self.get_iter_at_offset(end_offset)
+	def get_word(self, textiter, word_re=None):
+		return ''.join(self.get_word_halves(textiter, word_re=word_re))
+	def get_current_word(self, word_re=None):
+		return self.get_word(self.get_cursor_iter(), word_re=word_re)
 	def get_cursor_iter(self):
 		return self.get_iter_at_mark(self.get_insert())
 	def replace_current_word(self, replacement, word_re=None):
@@ -99,6 +103,9 @@ class CompletionSuggestionsBox(gtk.TextView):
 		self.set_wrap_mode(gtk.WRAP_WORD)
 		self.get_buffer().create_tag('active_suggestion', background='yellow', font='bold')
 		self.get_buffer().create_tag('inactive_suggestion')
+		# style
+		bgcolor = gtk.gdk.Color('lightgrey')
+		self.modify_base(gtk.STATE_NORMAL, bgcolor)
 	def filter_for(self, word):
 		last_suggestion = self.get_curret_suggestion()
 		self._filterer_word = word
@@ -479,15 +486,15 @@ def on_taskbody_typing(textbuffer, textiter, text, length):
 		c_word = first_half + text + second_half
 	else:
 		c_word = second_half
-	taskbody_word_edited(c_word)
+	act_taskbody_word(c_word)
 
 def on_taskbody_erase(textbuffer, startiter, enditer):
 	first_half = textbuffer.get_word_halves(startiter, word_re=taskbody_word_re)[0]
 	second_half = textbuffer.get_word_halves(enditer, word_re=taskbody_word_re)[1]
 	c_word = first_half+second_half
-	taskbody_word_edited(c_word)
+	act_taskbody_word(c_word)
 
-def taskbody_word_edited(word):
+def act_taskbody_word(word):
 	if word.startswith('#'):
 		completion_suggestions_box.show()
 		completion_suggestions_box.filter_for(word[1:])
@@ -502,7 +509,7 @@ def act_change_font(*X):
 	dlg = gtk.FontSelectionDialog(_("Select Font"))
 	dlg.set_transient_for(main_win)
 	dlg.set_modal(True)
-	dlg.set_font_name(Props['font'] or get_current_font(taskbody_view))
+	dlg.set_font_name(Props['field/taskbody/font'] or get_current_font(taskbody_view))
 	if dlg.run() == gtk.RESPONSE_OK:
 		font_name = dlg.get_font_name()
 		Props['field/taskbody/font'] = font_name
@@ -526,12 +533,18 @@ def on_taskbody_view_keypress(widget, event):
 			else:
 				completion_suggestions_box.next_suggestion()
 			return True  # prevent event propagation
-		if event.keyval in [gtk.gdk.keyval_from_name('Return'), gtk.gdk.keyval_from_name('Enter')]:
+		elif event.keyval in [gtk.gdk.keyval_from_name('Return'), gtk.gdk.keyval_from_name('Enter')]:
 			suggestion = completion_suggestions_box.get_curret_suggestion()
 			if suggestion is not None:
 				taskbody_buffer.replace_current_word(suggestion+' ', word_re=taskbody_word_re)
 				completion_suggestions_box.hide()
 				return True
+		elif event.keyval == gtk.gdk.keyval_from_name('Escape'):
+			completion_suggestions_box.hide()
+
+def on_taskbody_view_cursor_moved(Xtextview, Xstep_size, Xcount, Xextend_selection):
+	c_word = taskbody_buffer.get_current_word(word_re=taskbody_word_re)
+	act_taskbody_word(c_word)
 
 def taskbody_append_line(s):
 	if taskbody_buffer.get_text_all()[-1] != '\n': s = '\n' + s
@@ -622,6 +635,7 @@ taskbody_view = gtk.TextView(buffer=taskbody_buffer)
 taskbody_view.modify_font(pango.FontDescription(Props['field/taskbody/font'] or ''))
 taskbody_view.connect('populate-popup', on_taskbody_view_menu)
 taskbody_view.connect('key-press-event', on_taskbody_view_keypress)
+taskbody_view.connect_after('move-cursor', on_taskbody_view_cursor_moved)
 
 
 completion_suggestions_box = CompletionSuggestionsBox()
