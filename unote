@@ -49,12 +49,89 @@ class ScrolledWidget(gtk.ScrolledWindow):
 		return self.inner_widget
 
 class TextBuffer(gtk.TextBuffer):
+	_eventhandlers = []
 	def append(self, content):
 		self.insert(self.get_end_iter(), content)
 	def clear(self):
 		return self.delete(self.get_start_iter(), self.get_end_iter())
 	def get_text_all(self):
 		return self.get_text(self.get_start_iter(), self.get_end_iter(), include_hidden_chars=True)
+	def get_buffer_halves(self, textiter):
+		return self.get_slice(self.get_start_iter(), textiter, include_hidden_chars=True), self.get_slice(textiter, self.get_end_iter(), include_hidden_chars=True)
+	def get_word_halves(self, textiter, word_re=None):
+		if word_re is None: word_re = r'\w'
+		text_before, text_after = self.get_buffer_halves(textiter)
+		first_half = re.search(word_re + r'*\Z', unicode(text_before), re.U).group(0)
+		second_half = re.search(r'^'+word_re+r'*', unicode(text_after), re.U).group(0)
+		return first_half, second_half
+	def get_word_boundaries(self, textiter, word_re=None):
+		text_before, text_after = self.get_buffer_halves(textiter)
+		word_first_half, word_second_half = self.get_word_halves(textiter, word_re)
+		cursor_offset = len(text_before)
+		start_offset = cursor_offset - len(word_first_half)
+		end_offset = cursor_offset + len(word_second_half)
+		return self.get_iter_at_offset(start_offset), self.get_iter_at_offset(end_offset)
+	def get_cursor_iter(self):
+		return self.get_iter_at_mark(self.get_insert())
+	def replace_current_word(self, replacement, word_re=None):
+		start, end = self.get_word_boundaries(self.get_cursor_iter(), word_re)
+		self.delete(start, end)
+		self.insert(start, replacement)
+	def connect(self, eventname, *args):
+		self._eventhandlers.append(super(self.__class__, self).connect(eventname, *args))
+	def disconnect(self, eventhandle):
+		super(self.__class__, self).disconnect(eventhandle)
+		self._eventhandlers.remove(eventhandle)
+	def disable_events(self):
+		for eventhandle in self._eventhandlers:
+			self.handler_block(eventhandle)
+	def enable_events(self):
+		for eventhandle in self._eventhandlers:
+			self.handler_unblock(eventhandle)
+
+class CompletionSuggestionsBox(gtk.TextView):
+	_all_items = []
+	_filterer_word = ''
+	_shown_items = []
+	_suggestion_index = -1
+	def __init__(self, *args):
+		super(self.__class__, self).__init__(*args)
+		self.set_wrap_mode(gtk.WRAP_WORD)
+		self.get_buffer().create_tag('active_suggestion', background='yellow', font='bold')
+		self.get_buffer().create_tag('inactive_suggestion')
+	def filter_for(self, word):
+		last_suggestion = self.get_curret_suggestion()
+		self._filterer_word = word
+		self._shown_items = filter(lambda x: x.find(word)>-1, self._all_items)
+		idx = -1
+		if last_suggestion is not None:
+			try: idx = self._shown_items.index(last_suggestion)
+			except ValueError: pass
+		self.set_suggestion_index(idx)
+	def next_suggestion(self):
+		idx = self._suggestion_index + 1
+		if idx >= len(self._shown_items): idx = 0
+		self.set_suggestion_index(idx)
+		return self.get_curret_suggestion()
+	def previous_suggestion(self):
+		idx = self._suggestion_index - 1
+		if idx < 0: idx = len(self._shown_items)-1
+		self.set_suggestion_index(idx)
+		return self.get_curret_suggestion()
+	def get_curret_suggestion(self):
+		if len(self._shown_items) == 0: return None
+		return self._shown_items[self._suggestion_index]
+	def set_suggestion_index(self, idx=-1):
+		textbuffer = self.get_buffer()
+		textbuffer.set_text('')
+		for i, item in enumerate(self._shown_items):
+			tagname = 'active_suggestion' if i == idx else 'inactive_suggestion'
+			textbuffer.insert_with_tags_by_name(textbuffer.get_end_iter(), item, tagname)
+			textbuffer.insert(textbuffer.get_end_iter(), ' ')
+		self._suggestion_index = idx
+	def set_items(self, items):
+		self._all_items = items[:]
+		self.filter_for(self._filterer_word)
 
 class TreeStore(gtk.TreeStore):
 	def __init__(self, columns):
@@ -244,7 +321,7 @@ def getprops(*props):
 		values.append(Props[prop])
 	return values
 
-def load_task_texts():
+def load_tasks():
 	for dirpath, dirnames, filenames in os.walk(os.path.expanduser(TODO_DIR), topdown=False, onerror=None, followlinks=True):
 		for filename in filenames:
 			if any([fnmatch(filename, pattern) for pattern in TODOFILE_EXCLUDES]):
@@ -255,23 +332,32 @@ def load_task_texts():
 				yield text, filepath
 
 def get_tags(text):
-	return re.findall(r'(?:^|\s|,)(#[a-z0-9_-]+)', text, re.I)
+	return re.findall(r'(?:^|\s|,)(#[\w-]+)', unicode(text), re.I | re.U)
 
 def load_tasklist():
 	tasklist.clear()
-	AllTags.clear()
-	for task_text, task_file in load_task_texts():
+	for task_text, task_file in load_tasks():
 		task_headline_text = task_text.split("\n", 1)[0]
 		task_headline_markup = glib.markup_escape_text(task_headline_text)
 		tasklist.append(None, [task_headline_markup, task_text, task_file])
+
+def on_tasklist_changed(*X):
+	timer_once(0.2, process_tasklist)
+
+def process_tasklist():
+	AllTags.clear()
+	def process_tasklist_taskitem(Xmodel, path, treeiter):
+		task_text = tasklist[(path, 'raw_text')]
 		for tag in get_tags(task_text):
 			AllTags[tag] = AllTags.get(tag, 0) + 1
+	tasklist.foreach(process_tasklist_taskitem)
+	completion_suggestions_box.set_items(AllTags.keys())
 
-def load_task_text(text):
-	task_text_buffer.handler_block(eventhandle_task_text_changed)
-	task_text_buffer.set_text(text)
-	task_text_buffer.handler_unblock(eventhandle_task_text_changed)
-	parse_task_text(text)
+def load_taskbody(text):
+	taskbody_buffer.disable_events()
+	taskbody_buffer.set_text(text)
+	taskbody_buffer.enable_events()
+	parse_taskbody(text)
 	calendar.gotoday()
 
 def month_name_to_number(m):
@@ -280,7 +366,7 @@ def month_name_to_number(m):
 	except KeyError: pass
 	return m
 
-def parse_task_text(text):
+def parse_taskbody(text):
 	calendar_marks = []
 	re_months = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
 	for y, m, d in re.findall(r'\b([0-9]{4})-(0?[1-9]|1[0-2]|' + re_months + r')-(0?[1-9]|[12][0-9]|3[01])\b', text, re.I):
@@ -288,7 +374,7 @@ def parse_task_text(text):
 	for m, d in re.findall(r'\b(' + re_months + r')(?:-|\s+)(0?[1-9]|[12][0-9]|3[01])\b', text, re.I):
 		calendar_marks.append('0-%d-%d' % (int(month_name_to_number(m)), int(d)))
 	calendar.set_marks(calendar_marks)
-	if calendar_marks or re.search(r'\bdate:', text):
+	if calendar_marks or re.search(r'\bdate:', text, re.I):
 		if not calendar.get_visible():
 			calendar.gotoday()
 		calendar.show()
@@ -300,8 +386,8 @@ def on_tasklist_selection_change(selection):
 	for iterpath in iterpaths:
 		treeiter = tasklist.get_iter(iterpath)
 		task_text = tasklist[(treeiter, 'raw_text')]
-		load_task_text(task_text)
-		task_text_view.set_data('current-task', treeiter)
+		load_taskbody(task_text)
+		taskbody_view.set_data('current-task', treeiter)
 
 def timer_once(sec, func, func_args=()):
 	iden = func.__name__
@@ -371,15 +457,42 @@ def save_task(treeiter):
 	with open(task_file, 'w') as f:
 		f.write(text)
 
-def on_task_text_changed(*X):
-	text = task_text_buffer.get_text_all()
+def on_taskbody_changed(*X):
+	text = taskbody_buffer.get_text_all()
 	# represent task text in the task list
-	treeiter = task_text_view.get_data('current-task')
+	treeiter = taskbody_view.get_data('current-task')
+	if treeiter is None:
+		treeiter = tasklist.append(None, ['', '', ''])
 	tasklist[(treeiter, 'raw_text')] = text
 	# re-parse
-	parse_task_text(text)
+	parse_taskbody(text)
 	# schedule save
 	timer_once(5.0, save_task, (treeiter,))
+
+
+# define what counts as a word in task texts:
+taskbody_word_re = r'[#\w-]'
+
+def on_taskbody_typing(textbuffer, textiter, text, length):
+	first_half, second_half = textbuffer.get_word_halves(textiter, word_re=taskbody_word_re)
+	if re.search(taskbody_word_re + r'$', text):
+		c_word = first_half + text + second_half
+	else:
+		c_word = second_half
+	taskbody_word_edited(c_word)
+
+def on_taskbody_erase(textbuffer, startiter, enditer):
+	first_half = textbuffer.get_word_halves(startiter, word_re=taskbody_word_re)[0]
+	second_half = textbuffer.get_word_halves(enditer, word_re=taskbody_word_re)[1]
+	c_word = first_half+second_half
+	taskbody_word_edited(c_word)
+
+def taskbody_word_edited(word):
+	if word.startswith('#'):
+		completion_suggestions_box.show()
+		completion_suggestions_box.filter_for(word[1:])
+	else:
+		completion_suggestions_box.hide()
 
 def act_change_font(*X):
 	def get_current_font(textview):
@@ -389,14 +502,14 @@ def act_change_font(*X):
 	dlg = gtk.FontSelectionDialog(_("Select Font"))
 	dlg.set_transient_for(main_win)
 	dlg.set_modal(True)
-	dlg.set_font_name(Props['font'] or get_current_font(task_text_view))
+	dlg.set_font_name(Props['font'] or get_current_font(taskbody_view))
 	if dlg.run() == gtk.RESPONSE_OK:
 		font_name = dlg.get_font_name()
-		Props['field/task_text/font'] = font_name
-		task_text_view.modify_font(pango.FontDescription(font_name))
+		Props['field/taskbody/font'] = font_name
+		taskbody_view.modify_font(pango.FontDescription(font_name))
 	dlg.destroy()
 
-def on_task_text_view_menu(Xtextview, menu):
+def on_taskbody_view_menu(Xtextview, menu):
 	pos = 0
 	mi = ActionStockMenuItem(label=_("Default Font…"), stock_id=gtk.STOCK_SELECT_FONT, action=act_change_font)
 	menu.insert(mi, pos)
@@ -405,27 +518,44 @@ def on_task_text_view_menu(Xtextview, menu):
 	pos += 1
 	menu.show_all()
 
-def task_text_append_line(s):
-	if task_text_buffer.get_text_all()[-1] != '\n': s = '\n' + s
+def on_taskbody_view_keypress(widget, event):
+	if completion_suggestions_box.get_visible():
+		if event.keyval in [gtk.gdk.keyval_from_name('Tab'), gtk.gdk.keyval_from_name('ISO_Left_Tab')]:
+			if event.keyval == gtk.gdk.keyval_from_name('ISO_Left_Tab') or event.state & gtk.gdk.SHIFT_MASK:
+				completion_suggestions_box.previous_suggestion()
+			else:
+				completion_suggestions_box.next_suggestion()
+			return True  # prevent event propagation
+		if event.keyval in [gtk.gdk.keyval_from_name('Return'), gtk.gdk.keyval_from_name('Enter')]:
+			suggestion = completion_suggestions_box.get_curret_suggestion()
+			if suggestion is not None:
+				taskbody_buffer.replace_current_word(suggestion+' ', word_re=taskbody_word_re)
+				completion_suggestions_box.hide()
+				return True
+
+def taskbody_append_line(s):
+	if taskbody_buffer.get_text_all()[-1] != '\n': s = '\n' + s
 	if s[-1] != '\n': s = s + '\n'
-	task_text_buffer.append(s)
+	taskbody_buffer.append(s)
 
 def str_replace_last(s, f, r):
 	pos = s.rfind(f)
 	if pos == -1: return s
 	return s[0:pos] + r + s[pos+len(f):]
 
-def task_text_remove_last(s):
-	"""removes last occurrance of s from task_text.
+def taskbody_remove_last(s):
+	"""removes last occurrance of s from taskbody.
 	removes newline if s is a complete line."""
-	text = task_text_buffer.get_text_all()
+	text = taskbody_buffer.get_text_all()
 	ln = s
 	if ln[0] != '\n': ln = '\n' + ln
 	if ln[-1] != '\n': ln = ln + '\n'
 	newtext = str_replace_last(text, ln, '\n')
 	if newtext == text:
 		newtext = str_replace_last(text, s, '')
-	task_text_buffer.set_text(newtext)
+	taskbody_buffer.disable_events()
+	taskbody_buffer.set_text(newtext)
+	taskbody_buffer.enable_events()
 
 
 Timers = {}
@@ -469,6 +599,9 @@ searchbox.connect('changed', on_searchbox_change)
 tasklist = TreeStore([('headline_markup', str), ('raw_text', str), ('file', str)])
 tasklist_filtered = tasklist.filter_new()
 tasklist_filtered.set_visible_func(tasklist_filterer)
+tasklist.connect('row-changed', on_tasklist_changed)
+tasklist.connect('row-deleted', on_tasklist_changed)
+tasklist.connect('row-inserted', on_tasklist_changed)
 
 tasklist_view = gtk.TreeView(tasklist_filtered)
 add_treeview_columns(tasklist_view, [(_("Task"), 'markup', tasklist.get_column_num('headline_markup'))])
@@ -479,16 +612,24 @@ tasklist_selection = tasklist_view.get_selection()
 tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
 tasklist_selection.connect('changed', on_tasklist_selection_change)
 
-task_text_buffer = TextBuffer()
-task_text_view = gtk.TextView(buffer=task_text_buffer)
-task_text_view.modify_font(pango.FontDescription(Props['field/task_text/font'] or ''))
-eventhandle_task_text_changed = task_text_buffer.connect('changed', on_task_text_changed)
-task_text_view.connect('populate-popup', on_task_text_view_menu)
+taskbody_buffer = TextBuffer()
+taskbody_buffer.connect('changed', on_taskbody_changed)
+taskbody_buffer.connect('insert-text', on_taskbody_typing)
+taskbody_buffer.connect('delete-range', on_taskbody_erase)
+
+
+taskbody_view = gtk.TextView(buffer=taskbody_buffer)
+taskbody_view.modify_font(pango.FontDescription(Props['field/taskbody/font'] or ''))
+taskbody_view.connect('populate-popup', on_taskbody_view_menu)
+taskbody_view.connect('key-press-event', on_taskbody_view_keypress)
+
+
+completion_suggestions_box = CompletionSuggestionsBox()
 
 
 calendar = Calendar()
-calendar.connect('mark-added', lambda X, date: task_text_append_line(date))
-calendar.connect('mark-removed', lambda X, date: task_text_remove_last(date))
+calendar.connect('mark-added', lambda X, date: taskbody_append_line(date))
+calendar.connect('mark-removed', lambda X, date: taskbody_remove_last(date))
 
 add_key_binding(main_win, '<Control>q', lambda *X: main_quit())
 main_win.connect('delete-event', lambda *X: main_quit())
@@ -500,7 +641,8 @@ paned1.pack1(ScrolledWidget(savedsearches_view))
 paned1.pack2(paned2)
 paned2.pack1(box2)
 paned2.pack2(box3)
-box3.pack_start(ScrolledWidget(task_text_view))
+box3.pack_start(ScrolledWidget(taskbody_view))
+box3.pack_start(completion_suggestions_box, expand=False)
 box3.pack_start(box4, expand=False)
 box4.pack_start(calendar)
 box2.pack_start(searchbox, expand=False)
@@ -508,5 +650,6 @@ box2.pack_start(ScrolledWidget(tasklist_view))
 
 main_win.show_all()
 calendar.hide()
+completion_suggestions_box.hide()
 searchbox.grab_focus()
 gtk.main()
