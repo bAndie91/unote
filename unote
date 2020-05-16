@@ -490,6 +490,36 @@ def on_searchbox_change(*X):
 	timer_once(0.5, filter_tasklist)
 	Props['field/search/text'] = searchbox.get_text()
 
+def on_searchbox_keypress(widget, event):
+	pgup = event.keyval == gtk.gdk.keyval_from_name('Page_Up')
+	pgdn = event.keyval == gtk.gdk.keyval_from_name('Page_Down')
+	if pgup or pgdn:
+		Xmodel, s_rows = tasklist_selection.get_selected_rows()
+		if len(s_rows) == 0:
+			c_iter = None
+			s_iter = tasklist_filtered.get_iter_root()
+		else:
+			c_iter = tasklist_filtered.get_iter(s_rows[0 if pgup else -1])
+		if c_iter is not None:
+			def successor_iter(model, predecessor):
+				return model.iter_nth_child(predecessor, 0) if model.iter_has_child(predecessor) else model.iter_next(predecessor)
+			if pgdn:
+				s_iter = successor_iter(tasklist_filtered, c_iter) or c_iter
+			elif pgup:
+				predecessor = tasklist_filtered.get_iter_root()
+				while predecessor is not None:
+					successor = successor_iter(tasklist_filtered, predecessor)
+					if successor is None:
+						s_iter = tasklist_filtered.get_iter_root()
+						break
+					if tasklist_filtered.get_path(successor) == tasklist_filtered.get_path(c_iter):
+						s_iter = predecessor
+						break
+					predecessor = successor
+		if s_iter is not None:
+			tasklist_selection.unselect_all()
+			tasklist_selection.select_iter(s_iter)
+
 def filter_tasklist():
 	tasklist_filtered.refilter()
 
@@ -729,6 +759,7 @@ savedsearches_selection.set_mode(gtk.SELECTION_MULTIPLE)
 searchbox = gtk.Entry()
 searchbox.set_text(Props.get('field/search/text', ''))
 searchbox.connect('changed', on_searchbox_change)
+searchbox.connect('key-press-event', on_searchbox_keypress)
 
 tasklist = TreeStore([('headline_markup', str), ('raw_text', str), ('file', str)])
 tasklist_filtered = tasklist.filter_new()
