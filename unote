@@ -70,7 +70,7 @@ class TextBuffer(gtk.TextBuffer):
 	def clear(self):
 		return self.delete(self.get_start_iter(), self.get_end_iter())
 	def get_text_all(self):
-		return self.get_text(self.get_start_iter(), self.get_end_iter(), include_hidden_chars=True)
+		return self.get_slice(self.get_start_iter(), self.get_end_iter(), include_hidden_chars=True)
 	def get_buffer_halves(self, textiter):
 		return tuple(map(unicode, (self.get_slice(self.get_start_iter(), textiter, include_hidden_chars=True), self.get_slice(textiter, self.get_end_iter(), include_hidden_chars=True))))
 	def get_word_halves(self, textiter, word_re=None):
@@ -107,6 +107,29 @@ class TextBuffer(gtk.TextBuffer):
 	def enable_events(self):
 		for eventhandle in self._eventhandlers:
 			self.handler_unblock(eventhandle)
+	def get_selected_text(self):
+		if self.get_has_selection():
+			begin, end = self.get_selection_bounds()
+			return self.get_slice(begin, end, include_hidden_chars=True)
+		else:
+			return ''
+	def replace_selected_text(self, replacement):
+		if self.get_has_selection():
+			self.delete_selection(False, True)
+			begin_offset = self.get_property('cursor-position')
+			end_offset = begin_offset + len(replacement)
+			self.insert_at_cursor(replacement)
+			self.select_range(self.get_iter_at_offset(begin_offset), self.get_iter_at_offset(end_offset))
+	def get_current_line_boundaries(self):
+		text = self.get_text_all()
+		cur = self.get_property('cursor-position')
+		sol = text.rfind('\n', 0, cur) + 1
+		eol = text.find('\n', cur)
+		if eol == -1: eol = len(text)
+		return sol, eol
+	def get_current_line(self):
+		sol, eol = map(self.get_iter_at_offset, self.get_current_line_boundaries())
+		return self.get_slice(sol, eol, include_hidden_chars=True)
 
 class CompletionSuggestionsBox(gtk.TextView):
 	_all_items = []
@@ -564,13 +587,15 @@ def on_taskbody_view_menu(Xtextview, menu):
 	menu.show_all()
 
 def on_taskbody_view_keypress(widget, event):
+	tab = event.keyval == gtk.gdk.keyval_from_name('Tab') and not event.state & gtk.gdk.SHIFT_MASK
+	shift_tab = (event.keyval == gtk.gdk.keyval_from_name('Tab') and event.state & gtk.gdk.SHIFT_MASK) or event.keyval == gtk.gdk.keyval_from_name('ISO_Left_Tab')
 	if completion_suggestions_box.get_visible():
-		if event.keyval in [gtk.gdk.keyval_from_name('Tab'), gtk.gdk.keyval_from_name('ISO_Left_Tab')]:
-			if event.keyval == gtk.gdk.keyval_from_name('ISO_Left_Tab') or event.state & gtk.gdk.SHIFT_MASK:
-				completion_suggestions_box.previous_suggestion()
-			else:
-				completion_suggestions_box.next_suggestion()
+		if tab:
+			completion_suggestions_box.next_suggestion()
 			return True  # prevent event propagation
+		elif shift_tab:
+			completion_suggestions_box.previous_suggestion()
+			return True
 		elif event.keyval in [gtk.gdk.keyval_from_name('Return'), gtk.gdk.keyval_from_name('Enter')]:
 			suggestion = completion_suggestions_box.get_curret_suggestion()
 			if suggestion is not None:
@@ -579,6 +604,25 @@ def on_taskbody_view_keypress(widget, event):
 				return True
 		elif event.keyval == gtk.gdk.keyval_from_name('Escape'):
 			completion_suggestions_box.hide()
+			return True
+	else:
+		if tab or shift_tab:
+			selected_text = taskbody_buffer.get_selected_text()
+			if selected_text != '':
+				if tab:
+					selected_text = re.sub(r'^(?=.)', '\t', selected_text, flags=re.M)
+				elif shift_tab:
+					selected_text = re.sub(r'^\t', '', selected_text, flags=re.M)
+				taskbody_buffer.replace_selected_text(selected_text)
+			else:
+				if tab:
+					return False
+				elif shift_tab:
+					line = taskbody_buffer.get_current_line()
+					if line.startswith('\t'):
+						sol, Xeol = taskbody_buffer.get_current_line_boundaries()
+						taskbody_buffer.delete(taskbody_buffer.get_iter_at_offset(sol), taskbody_buffer.get_iter_at_offset(sol+1))
+			return True
 
 def on_taskbody_view_cursor_moved(Xtextview, Xstep_size, Xcount, Xextend_selection):
 	c_word = taskbody_buffer.get_current_word(word_re=taskbody_word_re)
