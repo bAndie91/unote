@@ -463,7 +463,8 @@ def parse_taskbody(text):
 	first_eol = text.find('\n')
 	if first_eol > -1:
 		taskbody_buffer.apply_tag_by_name('headline', 0, first_eol)
-	
+	for match in re.finditer(r'\b([a-z+-]+://[^\s]+)', text, re.I):
+		taskbody_buffer.apply_tag_by_name('link', match.start(), match.end())
 	# find date strings and show them in calendar
 	calendar_marks = []
 	re_months = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
@@ -669,7 +670,7 @@ def on_taskbody_view_menu(Xtextview, menu):
 def on_taskbody_view_keypress(widget, event):
 	tab = False
 	shift_tab = False
-	if not event.state & gtk.gdk.CONTROL_MASK:
+	if event.state & gtk.gdk.MODIFIER_MASK in [0, gtk.gdk.SHIFT_MASK]:
 		tab = event.keyval == gtk.gdk.keyval_from_name('Tab') and not event.state & gtk.gdk.SHIFT_MASK
 		shift_tab = (event.keyval == gtk.gdk.keyval_from_name('Tab') and event.state & gtk.gdk.SHIFT_MASK) or event.keyval == gtk.gdk.keyval_from_name('ISO_Left_Tab')
 	if completion_suggestions_box.get_visible():
@@ -679,7 +680,7 @@ def on_taskbody_view_keypress(widget, event):
 		elif shift_tab:
 			completion_suggestions_box.previous_suggestion()
 			return True
-		elif event.keyval in [gtk.gdk.keyval_from_name('Return'), gtk.gdk.keyval_from_name('Enter')]:
+		elif event.keyval in [gtk.gdk.keyval_from_name('Return'), gtk.gdk.keyval_from_name('Enter')] and event.state & gtk.gdk.CONTROL_MASK != 0:
 			suggestion = completion_suggestions_box.get_curret_suggestion()
 			if suggestion is not None:
 				taskbody_buffer.replace_current_word(suggestion+' ', word_re=taskbody_word_re)
