@@ -83,7 +83,7 @@ class TextBuffer(gtk.TextBuffer):
 	def clear(self):
 		return self.delete(self.get_start_iter(), self.get_end_iter())
 	def get_text_all(self):
-		return self.get_slice(self.get_start_iter(), self.get_end_iter(), include_hidden_chars=True)
+		return self.get_slice(self.get_start_iter(), self.get_end_iter(), include_hidden_chars=True).decode('utf-8')
 	def get_buffer_halves(self, textiter=None):
 		if textiter is None: textiter = self.get_cursor_iter()
 		return tuple(map(unicode, (self.get_slice(self.get_start_iter(), textiter, include_hidden_chars=True), self.get_slice(textiter, self.get_end_iter(), include_hidden_chars=True))))
@@ -209,28 +209,50 @@ class CompletionSuggestionsBox(gtk.TextView):
 		self.filter_for(self._filterer_word)
 
 class TreeStore(gtk.TreeStore):
-	def __init__(self, columns):
-		self.columns = {}
+	column = {}
+	reader = {}
+	def __init__(self, *columns):
 		types = []
 		n = 0
 		for col_name, col_type in columns:
+			if col_type == unicode:
+				col_type = str
+				self.reader[n] = self.to_unicode
 			types.append(col_type)
-			self.columns[col_name] = n
+			self.column[col_name] = n
 			n += 1
 			super(self.__class__, self).__init__(*types)
+	@staticmethod
+	def to_unicode(s):
+		return s.decode('utf-8')
 	def get_column_num(self, col_name):
-		return self.columns.get(col_name)
+		return self.column.get(col_name)
+	def get(self, row, *columns):
+		if type(row) == tuple:
+			row = self.get_iter(row)  # tree iterator path was given
+		columns = list(columns)
+		for i, col in enumerate(columns):
+			if isinstance(col, basestring):
+				columns[i] = self.get_column_num(col)
+		answer = super(self.__class__, self).get(row, *columns)
+		answer = list(answer)
+		for i, col in enumerate(columns):
+			if self.reader.has_key(col):
+				answer[i] = self.reader[col](answer[i])
+		answer = tuple(answer)
+		return answer
+	class TreeModelRow(object):
+		def __init__(self, treemodelrow):
+			self.real_treemodelrow = treemodelrow
+			for attr in dir(treemodelrow):
+				if attr not in ['__getitem__', 'iterchildren', '__class__']:
+					try: setattr(self, attr, getattr(treemodelrow, attr))
+					except AttributeError: pass
+		def __getitem__(self, item):
+			return self.model.get(self.iter, item)[0]
 	def __getitem__(self, item):
-		if type(item) == tuple:
-			if isinstance(item[1], basestring):
-				return super(self.__class__, self).__getitem__(item[0]).__getitem__(self.get_column_num(item[1]))
-		return super(self.__class__, self).__getitem__(item)
-	def __setitem__(self, item, value):
-		if type(item) == tuple:
-			if isinstance(item[1], basestring):
-				super(self.__class__, self).__getitem__(item[0]).__setitem__(self.get_column_num(item[1]), value)
-				return
-		super(self.__class__, self).__setitem__(item, value)
+		answer = super(self.__class__, self).__getitem__(item)
+		return self.TreeModelRow(answer)
 
 class Calendar(gtk.Calendar):
 	_marks = {}
@@ -418,10 +440,11 @@ def load_tasks():
 			filepath = os.path.join(dirpath, filename)
 			with open(filepath, 'r') as f:
 				text = f.read()
+				text = text.decode('utf-8')
 				yield text, filepath
 
 def get_tags(text):
-	return re.findall(r'(?:^|\s|,)(#[\w-]+)', unicode(text), re.I | re.U)
+	return re.findall(r'(?:^|\s|,)(#[\w-]+)', text, re.I | re.U)
 
 def load_tasklist():
 	tasklist.clear()
@@ -438,7 +461,7 @@ def on_tasklist_changed(*X):
 def process_tasklist():
 	AllTags.clear()
 	def process_tasklist_taskitem(Xmodel, path, treeiter):
-		task_text = tasklist[(path, 'raw_text')]
+		task_text = tasklist[path]['raw_text']
 		for tag in get_tags(task_text):
 			AllTags[tag] = AllTags.get(tag, 0) + 1
 	tasklist.foreach(process_tasklist_taskitem)
@@ -464,7 +487,9 @@ def parse_taskbody(text):
 	if first_eol > -1:
 		taskbody_buffer.apply_tag_by_name('headline', 0, first_eol)
 	for match in re.finditer(r'\b([a-z+-]+://[^\s]+)', text, re.I):
-		taskbody_buffer.apply_tag_by_name('link', match.start(), match.end())
+		taskbody_buffer.apply_tag_by_name('link', match.start(0), match.end(0))
+	for match in re.finditer(r'^\s*(?:-\s*)?(.+?)\s*(✓|✔|DONE)', text, re.U|re.M):
+		taskbody_buffer.apply_tag_by_name('strike', match.start(1), match.end(1))
 	# find date strings and show them in calendar
 	calendar_marks = []
 	re_months = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
@@ -484,10 +509,10 @@ def on_tasklist_selection_change(selection):
 	Xmodel, iterpaths = selection.get_selected_rows()
 	for iterpath in iterpaths:
 		treeiter = tasklist.get_iter(iterpath)
-		task_text = tasklist[(treeiter, 'raw_text')]
+		task_text = tasklist[treeiter]['raw_text']
 		load_taskbody(task_text)
 		taskbody_view.set_data('loaded-task-iter', treeiter)
-		Props['history/last/opened-task/path'] = tasklist[(treeiter, 'file')]
+		Props['history/last/opened-task/path'] = tasklist[treeiter]['file']
 
 def timer_once(sec, func, func_args=()):
 	iden = func.__name__
@@ -550,7 +575,7 @@ def tasklist_filterer(model, treeiter):
 	query = query.strip()
 	if query == '':
 		return True
-	task_text = model[(treeiter, 'raw_text')]
+	task_text = model[treeiter]['raw_text']
 	query_match = False
 	if task_text is not None:
 		for query_alternative in re.split(r'\s*,\s*', query):
@@ -584,8 +609,8 @@ def on_window_configure(widget, event):
 		Props['layout/window/%s' % k] = v
 
 def save_task(treeiter):
-	text = tasklist[(treeiter, 'raw_text')]
-	task_file = tasklist[(treeiter, 'file')]
+	text = tasklist[treeiter]['raw_text']
+	task_file = tasklist[treeiter]['file']
 	with open(task_file, 'w') as f:
 		f.write(text)
 
@@ -775,7 +800,7 @@ start_event_handle = main_win.connect('map-event', program_start)
 paned1.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/savedsearches/width', paned.get_position())))
 paned2.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/tasklist/width', paned.get_position())))
 
-savedsearches = TreeStore([('query', str)])
+savedsearches = TreeStore(('query', unicode))
 savedsearches_view = gtk.TreeView(savedsearches)
 add_treeview_columns(savedsearches_view, [(_("Search"), 'text', savedsearches.get_column_num('query'))])
 savedsearches_view.set_reorderable(True)
@@ -789,7 +814,7 @@ searchbox.set_text(Props.get('field/search/text', ''))
 searchbox.connect('changed', on_searchbox_change)
 searchbox.connect('key-press-event', on_searchbox_keypress)
 
-tasklist = TreeStore([('headline_markup', str), ('raw_text', str), ('file', str)])
+tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode))
 tasklist_filtered = tasklist.filter_new()
 tasklist_filtered.set_visible_func(tasklist_filterer)
 tasklist.connect('row-changed', on_tasklist_changed)
