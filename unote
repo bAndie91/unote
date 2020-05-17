@@ -73,7 +73,11 @@ class TextBuffer(gtk.TextBuffer):
 	_eventhandlers = []
 	def __init__(self, *args):
 		super(self.__class__, self).__init__(*args)
-		self.create_tag('headline', scale=pango.SCALE_LARGE)
+		self.create_tag('headline', scale=pango.SCALE_X_LARGE)
+		self.create_tag('strike', strikethrough=True)
+		self.create_tag('bold', weight=pango.WEIGHT_BOLD)
+		self.create_tag('code', family='Monospace')
+		self.create_tag('link', foreground='blue', underline=pango.UNDERLINE_SINGLE)
 	def append(self, content):
 		self.insert(self.get_end_iter(), content)
 	def clear(self):
@@ -143,6 +147,14 @@ class TextBuffer(gtk.TextBuffer):
 	def get_current_line(self):
 		sol, eol = map(self.get_iter_at_offset, self.get_current_line_boundaries())
 		return self.get_slice(sol, eol, include_hidden_chars=True)
+	def apply_tag_by_name(self, tagname, pos1, pos2):
+		super(self.__class__, self).apply_tag_by_name(tagname, self.get_iter_at_offset(pos1), self.get_iter_at_offset(pos2))
+	def remove_all_tags(self, start=None, end=None):
+		if start is None: start = self.get_start_iter()
+		if end is None: end = self.get_end_iter()
+		super(self.__class__, self).remove_all_tags(start, end)
+	def get_tag_by_name(self, tagname):
+		return self.get_tag_table().lookup(tagname)
 
 class CompletionSuggestionsBox(gtk.TextView):
 	_all_items = []
@@ -152,7 +164,7 @@ class CompletionSuggestionsBox(gtk.TextView):
 	def __init__(self, *args):
 		super(self.__class__, self).__init__(*args)
 		self.set_wrap_mode(gtk.WRAP_WORD)
-		self.get_buffer().create_tag('active_suggestion', background='yellow', font='bold')
+		self.get_buffer().create_tag('active_suggestion', background='yellow', weight=pango.WEIGHT_BOLD)
 		self.get_buffer().create_tag('inactive_suggestion')
 		# style
 		bgcolor = gtk.gdk.Color('lightgrey')
@@ -446,6 +458,13 @@ def month_name_to_number(m):
 	return m
 
 def parse_taskbody(text):
+	# style and format text
+	taskbody_buffer.remove_all_tags()
+	first_eol = text.find('\n')
+	if first_eol > -1:
+		taskbody_buffer.apply_tag_by_name('headline', 0, first_eol)
+	
+	# find date strings and show them in calendar
 	calendar_marks = []
 	re_months = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
 	for y, m, d in re.findall(r'\b([0-9]{4})-(0?[1-9]|1[0-2]|' + re_months + r')-(0?[1-9]|[12][0-9]|3[01])\b', text, re.I):
@@ -453,7 +472,7 @@ def parse_taskbody(text):
 	for m, d in re.findall(r'\b(' + re_months + r')(?:-|\s+)(0?[1-9]|[12][0-9]|3[01])\b', text, re.I):
 		calendar_marks.append('0-%d-%d' % (int(month_name_to_number(m)), int(d)))
 	calendar.set_marks(calendar_marks)
-	if calendar_marks or re.search(r'\bdate:', text, re.I):
+	if calendar_marks or re.search(r'\b(date|due):', text, re.I):
 		if not calendar.get_visible():
 			calendar.gotoday()
 		calendar.show()
@@ -613,19 +632,26 @@ def act_taskbody_word(word):
 		completion_suggestions_box.hide()
 
 def act_change_font(*X):
-	def get_current_font(textview):
-		pctx = textview.get_pango_context()
-		fdsc = pctx.get_font_description()
-		return fdsc.to_string()
 	dlg = gtk.FontSelectionDialog(_("Select Font"))
 	dlg.set_transient_for(main_win)
 	dlg.set_modal(True)
-	dlg.set_font_name(Props['field/taskbody/font'] or get_current_font(taskbody_view))
+	dlg.set_font_name(Props['field/taskbody/font'] or textview_get_current_font(taskbody_view)['name'])
 	if dlg.run() == gtk.RESPONSE_OK:
 		font_name = dlg.get_font_name()
 		Props['field/taskbody/font'] = font_name
-		taskbody_view.modify_font(pango.FontDescription(font_name))
+		taskbody_view_set_font(font_name)
 	dlg.destroy()
+
+def textview_get_current_font(textview):
+	pctx = textview.get_pango_context()
+	fdsc = pctx.get_font_description()
+	return {'name': fdsc.to_string(), 'size': int(fdsc.get_size()/pango.SCALE)}
+
+def taskbody_view_set_font(fontname):
+	taskbody_view.modify_font(pango.FontDescription(fontname))
+	fontsize = textview_get_current_font(taskbody_view)['size']
+	head_tag = taskbody_buffer.get_tag_by_name('headline')
+	head_tag.set_property('pixels-below-lines', int(fontsize * 0.8))
 
 def on_taskbody_view_menu(Xtextview, menu):
 	pos = 0
@@ -785,7 +811,7 @@ taskbody_buffer.connect('delete-range', on_taskbody_erase)
 
 
 taskbody_view = gtk.TextView(buffer=taskbody_buffer)
-taskbody_view.modify_font(pango.FontDescription(Props['field/taskbody/font'] or ''))
+taskbody_view_set_font(Props['field/taskbody/font'] or '')
 taskbody_view.connect('populate-popup', on_taskbody_view_menu)
 taskbody_view.connect('key-press-event', on_taskbody_view_keypress)
 taskbody_view.connect_after('move-cursor', on_taskbody_view_cursor_moved)
