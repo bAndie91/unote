@@ -491,21 +491,23 @@ def on_searchbox_change(*X):
 	Props['field/search/text'] = searchbox.get_text()
 
 def on_searchbox_keypress(widget, event):
-	pgup = event.keyval == gtk.gdk.keyval_from_name('Page_Up')
-	pgdn = event.keyval == gtk.gdk.keyval_from_name('Page_Down')
-	if pgup or pgdn:
+	shiftup = shiftdown = False
+	if (event.state & gtk.gdk.MODIFIER_MASK) == gtk.gdk.SHIFT_MASK:
+		shiftup = event.keyval == gtk.gdk.keyval_from_name('Up')
+		shiftdown = event.keyval == gtk.gdk.keyval_from_name('Down')
+	if shiftup or shiftdown:
 		Xmodel, s_rows = tasklist_selection.get_selected_rows()
 		if len(s_rows) == 0:
 			c_iter = None
 			s_iter = tasklist_filtered.get_iter_root()
 		else:
-			c_iter = tasklist_filtered.get_iter(s_rows[0 if pgup else -1])
+			c_iter = tasklist_filtered.get_iter(s_rows[0 if shiftup else -1])
 		if c_iter is not None:
 			def successor_iter(model, predecessor):
 				return model.iter_nth_child(predecessor, 0) if model.iter_has_child(predecessor) else model.iter_next(predecessor)
-			if pgdn:
+			if shiftdown:
 				s_iter = successor_iter(tasklist_filtered, c_iter) or c_iter
-			elif pgup:
+			elif shiftup:
 				predecessor = tasklist_filtered.get_iter_root()
 				while predecessor is not None:
 					successor = successor_iter(tasklist_filtered, predecessor)
@@ -696,7 +698,6 @@ def taskbody_remove_text_around_cursor(s):
 	pre, post = taskbody_buffer.get_buffer_halves()
 	pre_pos = (pre+post).rfind(s, 0, len(pre)+len(s)-2)
 	post_pos = post.find(s)
-	print pre_pos, post_pos
 	if pre_pos > -1 and post_pos > -1:
 		pre_distance = len(pre) - pre_pos - len(s)
 		post_distance = post_pos
