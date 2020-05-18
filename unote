@@ -473,8 +473,9 @@ def get_tags(text):
 def load_tasklist():
 	tasklist.clear()
 	for task_text, task_file in load_tasks():
-		task_headline_text = task_text.split("\n", 1)[0]
-		task_headline_markup = glib.markup_escape_text(task_headline_text)
+		head, body = task_text.split("\n", 1)
+		body = re.sub(r'\n+', ' ', body)
+		task_headline_markup = '%s <span foreground="grey">%s</span>' % (glib.markup_escape_text(head), glib.markup_escape_text(body))
 		treeiter = tasklist.append(None, [task_headline_markup, task_text, task_file])
 		if task_file == Props['history/last/opened-task/path']:
 			tasklist_selection.select_path(tasklist.get_path(treeiter))
@@ -593,7 +594,7 @@ def on_searchbox_change(*X):
 
 def on_searchbox_keypress(widget, event):
 	shiftup = shiftdown = False
-	if event.state & gtk.gdk.SHIFT_MASK != 0:
+	if event.state & (gtk.gdk.SHIFT_MASK|gtk.gdk.MOD1_MASK) != 0:
 		shiftup = event.keyval == gtk.gdk.keyval_from_name('Up')
 		shiftdown = event.keyval == gtk.gdk.keyval_from_name('Down')
 	if shiftup or shiftdown:
@@ -756,9 +757,12 @@ def on_taskbody_view_menu(Xtextview, menu):
 def on_taskbody_view_keypress(widget, event):
 	tab = False
 	shift_tab = False
-	if event.state & gtk.gdk.MODIFIER_MASK in [0, gtk.gdk.SHIFT_MASK]:
-		tab = event.keyval == gtk.gdk.keyval_from_name('Tab') and not event.state & gtk.gdk.SHIFT_MASK
-		shift_tab = (event.keyval == gtk.gdk.keyval_from_name('Tab') and event.state & gtk.gdk.SHIFT_MASK) or event.keyval == gtk.gdk.keyval_from_name('ISO_Left_Tab')
+	control = event.state & gtk.gdk.CONTROL_MASK != 0
+	shift = event.state & gtk.gdk.SHIFT_MASK != 0
+	alt = event.state & gtk.gdk.MOD1_MASK != 0
+	if not control and not alt:
+		tab = event.keyval == gtk.gdk.keyval_from_name('Tab') and not shift
+		shift_tab = (event.keyval == gtk.gdk.keyval_from_name('Tab') and shift) or event.keyval == gtk.gdk.keyval_from_name('ISO_Left_Tab')
 	enter = event.keyval in [gtk.gdk.keyval_from_name('Return'), gtk.gdk.keyval_from_name('Enter')]
 	if completion_suggestions_box.get_visible():
 		if tab:
@@ -767,7 +771,7 @@ def on_taskbody_view_keypress(widget, event):
 		elif shift_tab:
 			completion_suggestions_box.previous_suggestion()
 			return True
-		elif enter and event.state & gtk.gdk.CONTROL_MASK != 0:
+		elif enter and control:
 			suggestion = completion_suggestions_box.get_curret_suggestion()
 			if suggestion is not None:
 				taskbody_buffer.replace_current_word(suggestion+' ', word_re=taskbody_word_re)
@@ -794,7 +798,7 @@ def on_taskbody_view_keypress(widget, event):
 						sol, Xeol = taskbody_buffer.get_current_line_boundaries()
 						taskbody_buffer.delete(taskbody_buffer.get_iter_at_offset(sol), taskbody_buffer.get_iter_at_offset(sol+1))
 			return True
-	if event.state & gtk.gdk.CONTROL_MASK != 0 and enter:
+	if enter and control:
 		pos = taskbody_buffer.get_current_position()
 		for start, end in find_markup_positions(taskbody_buffer.get_text_all(), 'link'):
 			if start <= pos < end:
