@@ -83,7 +83,7 @@ class TextBuffer(gtk.TextBuffer):
 	def clear(self):
 		return self.delete(self.get_start_iter(), self.get_end_iter())
 	def get_text_all(self):
-		return self.get_slice(self.get_start_iter(), self.get_end_iter(), include_hidden_chars=True).decode('utf-8')
+		return unicode(self.get_slice(self.get_start_iter(), self.get_end_iter(), include_hidden_chars=True))
 	def get_buffer_halves(self, textiter=None):
 		if textiter is None: textiter = self.get_cursor_iter()
 		return tuple(map(unicode, (self.get_slice(self.get_start_iter(), textiter, include_hidden_chars=True), self.get_slice(textiter, self.get_end_iter(), include_hidden_chars=True))))
@@ -182,7 +182,7 @@ class CompletionSuggestionsBox(gtk.TextView):
 	@staticmethod
 	def _filter_func(query, option):
 		if query == option: return False
-		query_norm = re.sub(r'[^\w-]', '', query, flags=re.I)
+		query_norm = re.sub(r'[^\w-]', '', query, flags=re.I|re.U)
 		return option.find(query_norm) > -1
 	def next_suggestion(self):
 		idx = self._suggestion_index + 1
@@ -225,7 +225,7 @@ class TreeStore(gtk.TreeStore):
 			super(self.__class__, self).__init__(*types)
 	@staticmethod
 	def to_unicode(s):
-		return s.decode('utf-8')
+		return unicode(s)
 	def get_column_num(self, col_name):
 		return self.column.get(col_name)
 	def get(self, row, *columns):
@@ -446,11 +446,11 @@ def load_tasks():
 			filepath = os.path.join(dirpath, filename)
 			with open(filepath, 'r') as f:
 				text = f.read()
-				text = text.decode('utf-8')
+				text = unicode(text)
 				yield text, filepath
 
 def get_tags(text):
-	return re.findall(r'(?:^|\s|,)(#[\w-]+)', text, re.I | re.U)
+	return re.findall(r'(?:^|\s|,)(#[\w-]+)', text, re.I|re.U)
 
 def load_tasklist():
 	tasklist.clear()
@@ -494,7 +494,7 @@ def parse_taskbody(text):
 		taskbody_buffer.apply_tag_by_name('headline', 0, first_eol)
 	for match in re.finditer(r'\b([a-z+-]+://[^\s]+)', text, re.I):
 		taskbody_buffer.apply_tag_by_name('link', match.start(0), match.end(0))
-	for match in re.finditer(r'^\s*(?:-\s*)?(.+?)\s*(✓|✔|DONE)', text, re.U|re.M):
+	for match in re.finditer(ur'^\s*(?:-\s*)?(.+?)(\[DONE\]|\s+DONE|\s*[✓✔])', text, re.U|re.M):
 		taskbody_buffer.apply_tag_by_name('strike', match.start(1), match.end(1))
 	# find date strings and show them in calendar
 	calendar_marks = []
