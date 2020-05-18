@@ -164,6 +164,7 @@ class CompletionSuggestionsBox(gtk.TextView):
 	def __init__(self, *args):
 		super(self.__class__, self).__init__(*args)
 		self.set_wrap_mode(gtk.WRAP_WORD)
+		self.set_editable(False)
 		self.get_buffer().create_tag('active_suggestion', background='yellow', weight=pango.WEIGHT_BOLD)
 		self.get_buffer().create_tag('inactive_suggestion')
 		# style
@@ -250,6 +251,11 @@ class TreeStore(gtk.TreeStore):
 					except AttributeError: pass
 		def __getitem__(self, item):
 			return self.model.get(self.iter, item)[0]
+		def __setitem__(self, item, value):
+			item = self.model.get_column_num(item)
+			self.real_treemodelrow[item] = value
+		def __len__(self):
+			return self.real_treemodelrow.__len__()
 	def __getitem__(self, item):
 		answer = super(self.__class__, self).__getitem__(item)
 		return self.TreeModelRow(answer)
@@ -628,7 +634,7 @@ def on_taskbody_changed(*X):
 		first_line = m.group(1)
 		filepath = find_nonexistent_file(TODO_DIR, filenameize(first_line))
 		treeiter = tasklist.append(None, ['', '', filepath])
-	tasklist[(treeiter, 'raw_text')] = text
+	tasklist[treeiter]['raw_text'] = text
 	# schedule save
 	timer_once(5.0, save_task, (treeiter,))
 
