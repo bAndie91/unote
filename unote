@@ -90,9 +90,10 @@ class TextBuffer(gtk.TextBuffer):
 		super(self.__class__, self).__init__(*args)
 		self.create_tag('headline', scale=pango.SCALE_X_LARGE)
 		self.create_tag('strike', strikethrough=True)
-		self.create_tag('bold', weight=pango.WEIGHT_BOLD)
+		self.create_tag('bold', weight=pango.WEIGHT_ULTRABOLD)
 		self.create_tag('code', family='Monospace')
 		self.create_tag('link', foreground='blue', underline=pango.UNDERLINE_SINGLE)
+		self.create_tag('hidden', invisible=True)
 	def append(self, content):
 		self.insert(self.get_end_iter(), content)
 	def clear(self):
@@ -504,30 +505,46 @@ def month_name_to_number(m):
 	return m
 
 def find_markup_positions(text, markupname):
+	def find_codeblocks(text):
+		for match in re.finditer(r'^```[^\n]*\n(.*?)(?<=\n)```', text, re.S|re.M):
+			yield match.start(1), match.end(1), []
+	def find_codeinline(text):
+		# r'(?<!\\)(?:\\\\)*`(.*?(?<!\\)(?:\\\\)*)`'
+		for match in re.finditer(r'(?<!\w)`(.*?(?<!\\)(?:\\\\)*)`(?!\w)', text):
+			yield match.start(1), match.end(1), []
 	if markupname == 'headline':
 		first_eol = text.find('\n')
 		if first_eol > -1:
-			yield 0, first_eol
+			yield 0, first_eol, []
 	elif markupname == 'link':
 		for match in re.finditer(r'\b([a-z+-]+://[^\s]+)', text, re.I):
-			yield match.start(0), match.end(0)
+			yield match.start(0), match.end(0), []
 	elif markupname == 'strike':
 		for match in re.finditer(ur'^\s*(?:-\s*)?(.+?)(\s+(DONE|WONTFIX|OBSOLETED)|\s*(✓|✔|✗|✘|\[(DONE|WONTFIX|OBSOLETED)\]))', text, re.U|re.M):
-			yield match.start(1), match.end(1)
+			yield match.start(1), match.end(1), []
+	elif markupname == 'bold':
+		coderanges = [(s, e) for s, e, h in find_codeblocks(text)]
+		coderanges.extend([(s, e) for s, e, h in find_codeinline(text)])
+		for match in re.finditer(r'(^|\s)\*(?!\s|\*)(.+?)(?<!\s|\*)\*(\s|$)', text):
+			start, end = match.start(2), match.end(2)
+			if all([end < s or start > e for s, e in coderanges]):
+				yield start, end, [(start-1, start), (end, end+1)]
 	elif markupname == 'code':
-		for match in re.finditer(r'^```[^\n]*\n(.*?)(?<=\n)```', text, re.S|re.M):
-			yield match.start(1), match.end(1)
-		for match in re.finditer(r'(?<!\\)(?:\\\\)*`(.*?(?<!\\)(?:\\\\)*)`', text):
-			yield match.start(1), match.end(1)
+		for start, end, hideranges in find_codeblocks(text):
+			yield start, end, hideranges
+		for start, end, hideranges in find_codeinline(text):
+			yield start, end, hideranges
 	else:
 		raise
 
 def parse_taskbody(text):
 	# style and format text
 	taskbody_buffer.remove_all_tags()
-	for markupname in ['headline', 'link', 'strike', 'code']:
-		for start, end in find_markup_positions(text, markupname):
+	for markupname in ['headline', 'link', 'strike', 'bold', 'code']:
+		for start, end, hideranges in find_markup_positions(text, markupname):
 			taskbody_buffer.apply_tag_by_name(markupname, start, end)
+			for start, end in hideranges:
+				taskbody_buffer.apply_tag_by_name('hidden', start, end)
 	
 	# find date strings and show them in calendar
 	calendar_marks = []
@@ -576,7 +593,7 @@ def on_searchbox_change(*X):
 
 def on_searchbox_keypress(widget, event):
 	shiftup = shiftdown = False
-	if (event.state & gtk.gdk.MODIFIER_MASK) == gtk.gdk.SHIFT_MASK:
+	if event.state & gtk.gdk.SHIFT_MASK != 0:
 		shiftup = event.keyval == gtk.gdk.keyval_from_name('Up')
 		shiftdown = event.keyval == gtk.gdk.keyval_from_name('Down')
 	if shiftup or shiftdown:
