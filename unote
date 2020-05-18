@@ -48,6 +48,21 @@ def str_replace_last(s, f, r):
 	if pos == -1: return s
 	return s[0:pos] + r + s[pos+len(f):]
 
+def run_async(cmd, args):
+	args = args[:]
+	args.insert(0, os.path.basename(cmd))
+	pid1 = os.fork()
+	if pid1 == 0:
+		os.closerange(0, 255)
+		pid2 = os.fork()
+		if pid2 == 0:
+			os.execvp(cmd, args)
+			os._exit(127)
+		else:
+			os._exit(0)
+	else:
+		os.waitpid(pid1, 0)
+
 
 def add_key_binding(widget, keyname, callback):
 	accelgroup = gtk.AccelGroup()
@@ -106,6 +121,8 @@ class TextBuffer(gtk.TextBuffer):
 		return self.get_word(self.get_cursor_iter(), word_re=word_re)
 	def get_cursor_iter(self):
 		return self.get_iter_at_mark(self.get_insert())
+	def get_current_position(self):
+		return len(self.get_buffer_halves()[0])
 	def replace_current_word(self, replacement, word_re=None):
 		start, end = self.get_word_boundaries(self.get_cursor_iter(), word_re)
 		self.delete(start, end)
@@ -486,20 +503,32 @@ def month_name_to_number(m):
 	except KeyError: pass
 	return m
 
+def find_markup_positions(text, markupname):
+	if markupname == 'headline':
+		first_eol = text.find('\n')
+		if first_eol > -1:
+			yield 0, first_eol
+	elif markupname == 'link':
+		for match in re.finditer(r'\b([a-z+-]+://[^\s]+)', text, re.I):
+			yield match.start(0), match.end(0)
+	elif markupname == 'strike':
+		for match in re.finditer(ur'^\s*(?:-\s*)?(.+?)(\s+(DONE|WONTFIX|OBSOLETED)|\s*(✓|✔|✗|✘|\[(DONE|WONTFIX|OBSOLETED)\]))', text, re.U|re.M):
+			yield match.start(1), match.end(1)
+	elif markupname == 'code':
+		for match in re.finditer(r'^```[^\n]*\n(.*?)(?<=\n)```', text, re.S|re.M):
+			yield match.start(1), match.end(1)
+		for match in re.finditer(r'(?<!\\)(?:\\\\)*`(.*?(?<!\\)(?:\\\\)*)`', text):
+			yield match.start(1), match.end(1)
+	else:
+		raise
+
 def parse_taskbody(text):
 	# style and format text
 	taskbody_buffer.remove_all_tags()
-	first_eol = text.find('\n')
-	if first_eol > -1:
-		taskbody_buffer.apply_tag_by_name('headline', 0, first_eol)
-	for match in re.finditer(r'\b([a-z+-]+://[^\s]+)', text, re.I):
-		taskbody_buffer.apply_tag_by_name('link', match.start(0), match.end(0))
-	for match in re.finditer(ur'^\s*(?:-\s*)?(.+?)(\s+DONE|\s*(✓|✔|\[DONE\]))', text, re.U|re.M):
-		taskbody_buffer.apply_tag_by_name('strike', match.start(1), match.end(1))
-	for match in re.finditer(r'^```[^\n]*\n(.*?)(?<=\n)```', text, re.S|re.M):
-		taskbody_buffer.apply_tag_by_name('code', match.start(1), match.end(1))
-	for match in re.finditer(r'`(.*?)`', text):
-		taskbody_buffer.apply_tag_by_name('code', match.start(1), match.end(1))
+	for markupname in ['headline', 'link', 'strike', 'code']:
+		for start, end in find_markup_positions(text, markupname):
+			taskbody_buffer.apply_tag_by_name(markupname, start, end)
+	
 	# find date strings and show them in calendar
 	calendar_marks = []
 	re_months = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
@@ -713,6 +742,7 @@ def on_taskbody_view_keypress(widget, event):
 	if event.state & gtk.gdk.MODIFIER_MASK in [0, gtk.gdk.SHIFT_MASK]:
 		tab = event.keyval == gtk.gdk.keyval_from_name('Tab') and not event.state & gtk.gdk.SHIFT_MASK
 		shift_tab = (event.keyval == gtk.gdk.keyval_from_name('Tab') and event.state & gtk.gdk.SHIFT_MASK) or event.keyval == gtk.gdk.keyval_from_name('ISO_Left_Tab')
+	enter = event.keyval in [gtk.gdk.keyval_from_name('Return'), gtk.gdk.keyval_from_name('Enter')]
 	if completion_suggestions_box.get_visible():
 		if tab:
 			completion_suggestions_box.next_suggestion()
@@ -720,7 +750,7 @@ def on_taskbody_view_keypress(widget, event):
 		elif shift_tab:
 			completion_suggestions_box.previous_suggestion()
 			return True
-		elif event.keyval in [gtk.gdk.keyval_from_name('Return'), gtk.gdk.keyval_from_name('Enter')] and event.state & gtk.gdk.CONTROL_MASK != 0:
+		elif enter and event.state & gtk.gdk.CONTROL_MASK != 0:
 			suggestion = completion_suggestions_box.get_curret_suggestion()
 			if suggestion is not None:
 				taskbody_buffer.replace_current_word(suggestion+' ', word_re=taskbody_word_re)
@@ -747,6 +777,13 @@ def on_taskbody_view_keypress(widget, event):
 						sol, Xeol = taskbody_buffer.get_current_line_boundaries()
 						taskbody_buffer.delete(taskbody_buffer.get_iter_at_offset(sol), taskbody_buffer.get_iter_at_offset(sol+1))
 			return True
+	if event.state & gtk.gdk.CONTROL_MASK != 0 and enter:
+		pos = taskbody_buffer.get_current_position()
+		for start, end in find_markup_positions(taskbody_buffer.get_text_all(), 'link'):
+			if start <= pos < end:
+				link = taskbody_buffer.get_text_all()[start:end]
+				run_async('xdg-open', [link])
+				return True
 
 def on_taskbody_view_cursor_moved(Xtextview, Xstep_size, Xcount, Xextend_selection):
 	c_word = taskbody_buffer.get_current_word(word_re=taskbody_word_re)
