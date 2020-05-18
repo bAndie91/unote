@@ -526,7 +526,7 @@ def find_markup_positions(text, markupname):
 	elif markupname == 'bold':
 		coderanges = [(s, e) for s, e, h in find_codeblocks(text)]
 		coderanges.extend([(s, e) for s, e, h in find_codeinline(text)])
-		for match in re.finditer(r'(^|\s)\*(?!\s|\*)(.+?)(?<!\s|\*)\*(\s|$)', text):
+		for match in re.finditer(r'(^|\s)\*(?!\s|\*)(.+?)(?<!\s|\*)\*(?=\s|$)', text):
 			start, end = match.start(2), match.end(2)
 			if all([end < s or start > e for s, e in coderanges]):
 				yield start, end, [(start-1, start), (end, end+1)]
@@ -771,7 +771,7 @@ def on_taskbody_view_keypress(widget, event):
 		elif shift_tab:
 			completion_suggestions_box.previous_suggestion()
 			return True
-		elif enter and control:
+		elif control and enter:
 			suggestion = completion_suggestions_box.get_curret_suggestion()
 			if suggestion is not None:
 				taskbody_buffer.replace_current_word(suggestion+' ', word_re=taskbody_word_re)
@@ -798,13 +798,21 @@ def on_taskbody_view_keypress(widget, event):
 						sol, Xeol = taskbody_buffer.get_current_line_boundaries()
 						taskbody_buffer.delete(taskbody_buffer.get_iter_at_offset(sol), taskbody_buffer.get_iter_at_offset(sol+1))
 			return True
-	if enter and control:
+	if control and enter:
 		pos = taskbody_buffer.get_current_position()
 		for start, end in find_markup_positions(taskbody_buffer.get_text_all(), 'link'):
 			if start <= pos < end:
 				link = taskbody_buffer.get_text_all()[start:end]
 				run_async('xdg-open', [link])
 				return True
+	if control and event.keyval == gtk.gdk.keyval_from_name('b'):
+		s = taskbody_buffer.get_selected_text()
+		if s.startswith('*') and s.endswith('*') and len(s)>2:
+			s = s[1:-1]
+		else:
+			s = '*' + s + '*'
+		taskbody_buffer.replace_selected_text(s)
+		return True
 
 def on_taskbody_view_cursor_moved(Xtextview, Xstep_size, Xcount, Xextend_selection):
 	c_word = taskbody_buffer.get_current_word(word_re=taskbody_word_re)
