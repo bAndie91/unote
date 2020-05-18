@@ -690,8 +690,13 @@ def on_taskbody_view_menu(Xtextview, menu):
 	mi = ActionStockMenuItem(label=_("Default Font…"), stock_id=gtk.STOCK_SELECT_FONT, action=act_change_font)
 	menu.insert(mi, pos)
 	pos += 1
-	mi = gtk.CheckMenuItem(label=_("Wrap"))
-	mi.connect('activate', lambda mi, *X: (taskbody_view.set_wrap_mode(gtk.WRAP_NONE), mi.set_active(False)) if taskbody_view.get_wrap_mode() != gtk.WRAP_NONE else (taskbody_view.set_wrap_mode(gtk.WRAP_WORD), mi.set_active(True)))
+	mi = gtk.CheckMenuItem(label=_("Wrap Lines"))
+	mi.set_active(taskbody_view.get_wrap_mode() != gtk.WRAP_NONE)
+	def toggle_wrap(mi, *X):
+		wrap_mode = 'WRAP_NONE' if taskbody_view.get_wrap_mode() != gtk.WRAP_NONE else 'WRAP_WORD'
+		taskbody_view.set_wrap_mode(getattr(gtk, wrap_mode))
+		Props['field/taskbody/wrapmode'] = wrap_mode
+	mi.connect('toggled', toggle_wrap)
 	menu.insert(mi, pos)
 	pos += 1
 	menu.insert(gtk.SeparatorMenuItem(), pos)
@@ -844,6 +849,7 @@ taskbody_buffer.connect('delete-range', on_taskbody_erase)
 
 taskbody_view = gtk.TextView(buffer=taskbody_buffer)
 taskbody_view_set_font(Props['field/taskbody/font'] or '')
+taskbody_view.set_wrap_mode(getattr(gtk, Props['field/taskbody/wrapmode'] or 'WRAP_WORD'))
 taskbody_view.connect('populate-popup', on_taskbody_view_menu)
 taskbody_view.connect('key-press-event', on_taskbody_view_keypress)
 taskbody_view.connect_after('move-cursor', on_taskbody_view_cursor_moved)
