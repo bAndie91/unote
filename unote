@@ -85,8 +85,8 @@ class ScrolledWidget(gtk.ScrolledWindow):
 		return self.inner_widget
 
 class TextBuffer(gtk.TextBuffer):
-	_eventhandlers = []
 	def __init__(self, *args):
+		self._eventhandlers = []
 		super(self.__class__, self).__init__(*args)
 		self.create_tag('headline', scale=pango.SCALE_X_LARGE)
 		self.create_tag('strike', strikethrough=True)
@@ -176,11 +176,11 @@ class TextBuffer(gtk.TextBuffer):
 		return self.get_tag_table().lookup(tagname)
 
 class CompletionSuggestionsBox(gtk.TextView):
-	_all_items = []
-	_filterer_word = ''
-	_shown_items = []
-	_suggestion_index = -1
 	def __init__(self, *args):
+		self._all_items = []
+		self._filterer_word = ''
+		self._shown_items = []
+		self._suggestion_index = -1
 		super(self.__class__, self).__init__(*args)
 		self.set_wrap_mode(gtk.WRAP_WORD)
 		self.set_editable(False)
@@ -229,19 +229,26 @@ class CompletionSuggestionsBox(gtk.TextView):
 		self.filter_for(self._filterer_word)
 
 class TreeStore(gtk.TreeStore):
-	column = {}
-	reader = {}
 	def __init__(self, *columns):
+		self.column = {}
+		self.reader = {}
+		self.empty = []
 		types = []
 		n = 0
 		for col_name, col_type in columns:
+			empty_value = None
 			if col_type == unicode:
 				col_type = str
 				self.reader[n] = self.to_unicode
+			if col_type == str:
+				empty_value = ''
+			elif col_type in [int, float]:
+				empty_value = 0
+			self.empty.append(empty_value)
 			types.append(col_type)
 			self.column[col_name] = n
 			n += 1
-			super(self.__class__, self).__init__(*types)
+		super(self.__class__, self).__init__(*types)
 	@staticmethod
 	def to_unicode(s):
 		return unicode(s)
@@ -278,10 +285,15 @@ class TreeStore(gtk.TreeStore):
 	def __getitem__(self, item):
 		answer = super(self.__class__, self).__getitem__(item)
 		return self.TreeModelRow(answer)
+	def append(self, parent, row):
+		if type(row) == dict:
+			cols = row
+			row = self.empty[:]
+			for col_name, value in cols.iteritems():
+				row[self.get_column_num(col_name)] = value
+		return super(self.__class__, self).append(parent, row)
 
 class Calendar(gtk.Calendar):
-	_marks = {}
-	selected_day = (0, 0, 0)
 	__gsignals__ = {
 		'marks-changed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()),
 		'mark-added': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, (str,)),
@@ -289,6 +301,8 @@ class Calendar(gtk.Calendar):
 	}
 	date_format = '%04d-%02d-%02d'
 	def __init__(self):
+		self._marks = {}
+		self.selected_day = (0, 0, 0)
 		super(self.__class__, self).__init__()
 		self.set_display_options(self.get_display_options() | gtk.CALENDAR_WEEK_START_MONDAY)
 		# create popup menu
@@ -407,7 +421,9 @@ def add_treeview_columns(treeview, columns):
 		width = Props['layout/column/%s/width'%col_title]
 		if width is not None:
 			tvc.set_fixed_width(int(width))
-		tvc.connect('notify::width', lambda *X: Props.__setitem__('layout/column/%s/width'%col_title, tvc.get_width()))
+		else:
+			tvc.set_fixed_width(100)
+		tvc.connect('notify::width', lambda widget, prop: Props.__setitem__('layout/column/%s/width'%widget.get_title(), widget.get_width()))
 
 def main_quit():
 	# execute outstanding timers
@@ -426,8 +442,10 @@ def program_start(widget, event):
 	load_tasklist()
 
 class PropertyTree(dict):
-	savedprops = {}
-	write_delay = 1.0
+	def __init__(self, *args):
+		super(self.__class__, self).__init__(*args)
+		self.savedprops = {}
+		self.write_delay = 1.0
 	def __getitem__(self, propname):
 		propvalue = super(self.__class__, self).get(propname)
 		if propvalue is None:
@@ -469,21 +487,28 @@ def load_tasks():
 			if any([fnmatch(filename, pattern) for pattern in TODOFILE_EXCLUDES]):
 				continue
 			filepath = os.path.join(dirpath, filename)
+			mtime = os.stat(filepath).st_mtime
 			with open(filepath, 'r') as f:
 				text = f.read()
 				text = unicode(text)
-				yield text, filepath
+				yield text, filepath, mtime
 
 def get_tags(text):
 	return re.findall(r'(?:^|\s|,)(#[\w-]+)', text, re.I|re.U)
 
 def load_tasklist():
 	tasklist.clear()
-	for task_text, task_file in load_tasks():
+	for task_text, task_file, task_mtime in load_tasks():
 		head, body = task_text.split("\n", 1)
 		body = re.sub(r'\n+', ' ', body)
 		task_headline_markup = '%s <span foreground="grey">%s</span>' % (glib.markup_escape_text(head), glib.markup_escape_text(body))
-		treeiter = tasklist.append(None, [task_headline_markup, task_text, task_file])
+		modified = time.strftime('%F %H:%M', time.localtime(task_mtime))
+		treeiter = tasklist.append(None, {
+			'headline_markup': task_headline_markup,
+			'raw_text': task_text,
+			'file': task_file,
+			'updated': modified,
+		})
 		if task_file == Props['history/last/opened-task/path']:
 			tasklist_selection.select_path(tasklist.get_path(treeiter))
 
@@ -701,7 +726,7 @@ def on_taskbody_changed(*X):
 		if not m: return
 		first_line = m.group(1)
 		filepath = find_nonexistent_file(TODO_DIR, filenameize(first_line))
-		treeiter = tasklist.append(None, ['', '', filepath])
+		treeiter = tasklist.append(None, {'file': filepath})
 	tasklist[treeiter]['raw_text'] = text
 	# schedule save
 	timer_once(5.0, save_task, (treeiter,))
@@ -912,7 +937,7 @@ searchbox.set_text(Props.get('field/search/text', ''))
 searchbox.connect('changed', on_searchbox_change)
 searchbox.connect('key-press-event', on_searchbox_keypress)
 
-tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode))
+tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('updated', str))
 tasklist_filtered = tasklist.filter_new()
 tasklist_filtered.set_visible_func(tasklist_filterer)
 tasklist.connect('row-changed', on_tasklist_changed)
@@ -920,7 +945,10 @@ tasklist.connect('row-deleted', on_tasklist_changed)
 tasklist.connect('row-inserted', on_tasklist_changed)
 
 tasklist_view = gtk.TreeView(tasklist_filtered)
-add_treeview_columns(tasklist_view, [(_("Task"), 'markup', tasklist.get_column_num('headline_markup'))])
+add_treeview_columns(tasklist_view, [
+	(_("Task"), 'markup', tasklist.get_column_num('headline_markup')),
+	(_("Updated"), 'text', tasklist.get_column_num('updated')),
+])
 tasklist_view.set_reorderable(True)
 tasklist_view.set_headers_clickable(True)
 
