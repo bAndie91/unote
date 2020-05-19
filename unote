@@ -402,6 +402,12 @@ def add_treeview_columns(treeview, columns):
 		tvc.pack_start(cr_txt, True)
 		tvc.add_attribute(cr_txt, col_attr, col_num)
 		treeview.append_column(tvc)
+		tvc.set_resizable(True)
+		tvc.set_sizing(gtk.TREE_VIEW_COLUMN_FIXED)
+		width = Props['layout/column/%s/width'%col_title]
+		if width is not None:
+			tvc.set_fixed_width(int(width))
+		tvc.connect('notify::width', lambda *X: Props.__setitem__('layout/column/%s/width'%col_title, tvc.get_width()))
 
 def main_quit():
 	# execute outstanding timers
@@ -508,10 +514,12 @@ def month_name_to_number(m):
 
 def find_markup_positions(text, markupname):
 	def find_codeblocks(text):
+		# lines between 2 set of triple backticks
 		for match in re.finditer(r'^```[^\n]*\n(.*?)(?<=\n)```', text, re.S|re.M):
 			yield match.start(1), match.end(1), []
 	def find_codeinline(text):
 		# r'(?<!\\)(?:\\\\)*`(.*?(?<!\\)(?:\\\\)*)`'
+		# words embraced by backticks
 		for match in re.finditer(r'(?<!\w)`(.*?(?<!\\)(?:\\\\)*)`(?!\w)', text):
 			yield match.start(1), match.end(1), []
 	if markupname == 'headline':
@@ -528,11 +536,13 @@ def find_markup_positions(text, markupname):
 		coderanges = [(s, e) for s, e, h in find_codeblocks(text)]
 		coderanges.extend([(s, e) for s, e, h in find_codeinline(text)])
 		if markupname == 'bold':
-			for match in re.finditer(r'(^|\s)\*(?!\s|\*)(.+?)(?<!\s|\*)\*(?=\s|$)', text):
+			# words embraced in asterisks, optionally surrounded by brackets or whitespace but nothing else
+			for match in re.finditer(r'(^|[\s\(\[\{\<])\*(?!\s|\*)(.+?)(?<!\s|\*)\*(?=[\s\)\]\}\>]|$)', text):
 				start, end = match.start(2), match.end(2)
 				if all([end < s or start > e for s, e in coderanges]):
 					yield start, end, [(start-1, start), (end, end+1)]
 		elif markupname == 'alert':
+			# a line ending in double exclamation marks
 			for match in re.finditer(r'^\s*(?:-\s*)?(.+!!)\s*$', text, re.M):
 				start, end = match.start(1), match.end(1)
 				if all([end < s or start > e for s, e in coderanges]):
