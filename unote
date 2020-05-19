@@ -94,6 +94,7 @@ class TextBuffer(gtk.TextBuffer):
 		self.create_tag('code', family='Monospace')
 		self.create_tag('link', foreground='blue', underline=pango.UNDERLINE_SINGLE)
 		self.create_tag('hidden', invisible=True)
+		self.create_tag('alert', foreground='red')
 	def append(self, content):
 		self.insert(self.get_end_iter(), content)
 	def clear(self):
@@ -523,13 +524,19 @@ def find_markup_positions(text, markupname):
 	elif markupname == 'strike':
 		for match in re.finditer(ur'^\s*(?:-\s*)?(.+?)(\s+(DONE|WONTFIX|OBSOLETED)|\s*(✓|✔|✗|✘|\[(DONE|WONTFIX|OBSOLETED)\]))', text, re.U|re.M):
 			yield match.start(1), match.end(1), []
-	elif markupname == 'bold':
+	elif markupname in ['bold', 'alert']:
 		coderanges = [(s, e) for s, e, h in find_codeblocks(text)]
 		coderanges.extend([(s, e) for s, e, h in find_codeinline(text)])
-		for match in re.finditer(r'(^|\s)\*(?!\s|\*)(.+?)(?<!\s|\*)\*(?=\s|$)', text):
-			start, end = match.start(2), match.end(2)
-			if all([end < s or start > e for s, e in coderanges]):
-				yield start, end, [(start-1, start), (end, end+1)]
+		if markupname == 'bold':
+			for match in re.finditer(r'(^|\s)\*(?!\s|\*)(.+?)(?<!\s|\*)\*(?=\s|$)', text):
+				start, end = match.start(2), match.end(2)
+				if all([end < s or start > e for s, e in coderanges]):
+					yield start, end, [(start-1, start), (end, end+1)]
+		elif markupname == 'alert':
+			for match in re.finditer(r'^\s*(?:-\s*)?(.+!!)\s*$', text, re.M):
+				start, end = match.start(1), match.end(1)
+				if all([end < s or start > e for s, e in coderanges]):
+					yield start, end, []
 	elif markupname == 'code':
 		for start, end, hideranges in find_codeblocks(text):
 			yield start, end, hideranges
@@ -541,7 +548,7 @@ def find_markup_positions(text, markupname):
 def parse_taskbody(text):
 	# style and format text
 	taskbody_buffer.remove_all_tags()
-	for markupname in ['headline', 'link', 'strike', 'bold', 'code']:
+	for markupname in ['headline', 'link', 'strike', 'bold', 'code', 'alert']:
 		for start, end, hideranges in find_markup_positions(text, markupname):
 			taskbody_buffer.apply_tag_by_name(markupname, start, end)
 			for start, end in hideranges:
