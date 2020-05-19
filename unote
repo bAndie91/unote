@@ -499,8 +499,15 @@ def get_tags(text):
 def load_tasklist():
 	tasklist.clear()
 	for task_text, task_file, task_mtime in load_tasks():
-		head, body = task_text.split("\n", 1)
+		preview = task_text
+		shift = 0
+		for s, e, hideranges in find_markup_positions(preview, 'bold'):
+			for s, e in hideranges:
+				preview = preview[0:s+shift] + preview[e+shift:]
+				shift -= e-s
+		head, body = preview.split("\n", 1)
 		body = re.sub(r'\n+', ' ', body)
+		body = body[0:255] + ('…' if len(body)>255 else '')
 		task_headline_markup = '%s <span foreground="grey">%s</span>' % (glib.markup_escape_text(head), glib.markup_escape_text(body))
 		modified = time.strftime('%F %H:%M', time.localtime(task_mtime))
 		treeiter = tasklist.append(None, {
