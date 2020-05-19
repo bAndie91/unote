@@ -861,12 +861,9 @@ Props = PropertyTree()
 AllTags = {}
 
 main_win = gtk.Window()
-box1 = gtk.HBox()
 paned1 = gtk.HPaned()
-paned2 = gtk.HPaned()
-box2 = gtk.VBox()
-box3 = gtk.VBox()
-box4 = gtk.HBox()
+paned2h = gtk.HPaned()
+paned2v = gtk.VPaned()
 
 try: main_win.resize(*map(int, getprops('layout/window/size/width', 'layout/window/size/height')))
 except (ValueError, TypeError): pass
@@ -874,12 +871,15 @@ try: main_win.move(*map(int, getprops('layout/window/position/x', 'layout/window
 except (ValueError, TypeError): pass
 try: paned1.set_position(*map(int, getprops('layout/panel/savedsearches/width')))
 except (ValueError, TypeError): pass
-try: paned2.set_position(*map(int, getprops('layout/panel/tasklist/width')))
+try: paned2h.set_position(*map(int, getprops('layout/panel/tasklist/width')))
+except (ValueError, TypeError): pass
+try: paned2v.set_position(*map(int, getprops('layout/panel/tasklist/height')))
 except (ValueError, TypeError): pass
 
 start_event_handle = main_win.connect('map-event', program_start)
 paned1.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/savedsearches/width', paned.get_position())))
-paned2.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/tasklist/width', paned.get_position())))
+paned2h.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/tasklist/width', paned.get_position())))
+paned2v.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/tasklist/height', paned.get_position())))
 
 savedsearches = TreeStore(('query', unicode))
 savedsearches_view = gtk.TreeView(savedsearches)
@@ -916,7 +916,6 @@ taskbody_buffer.connect('changed', on_taskbody_changed)
 taskbody_buffer.connect('insert-text', on_taskbody_typing)
 taskbody_buffer.connect('delete-range', on_taskbody_erase)
 
-
 taskbody_view = gtk.TextView(buffer=taskbody_buffer)
 taskbody_view_set_font(Props['field/taskbody/font'] or '')
 taskbody_view.set_wrap_mode(getattr(gtk, Props['field/taskbody/wrapmode'] or 'WRAP_WORD'))
@@ -924,9 +923,7 @@ taskbody_view.connect('populate-popup', on_taskbody_view_menu)
 taskbody_view.connect('key-press-event', on_taskbody_view_keypress)
 taskbody_view.connect_after('move-cursor', on_taskbody_view_cursor_moved)
 
-
 completion_suggestions_box = CompletionSuggestionsBox()
-
 
 calendar = Calendar()
 calendar.connect('mark-added', lambda X, date: taskbody_insert_line(date))
@@ -935,24 +932,94 @@ calendar.connect('mark-removed', lambda X, date: taskbody_remove_text_around_cur
 add_key_binding(main_win, '<Control>q', lambda *X: main_quit())
 add_key_binding(main_win, '<Control>f', lambda *X: searchbox.grab_focus())
 add_key_binding(main_win, '<Control>n', lambda *X: act_new_task())
+add_key_binding(main_win, '<Control><Shift>l', lambda *X: do_layout(LAYOUT[(LAYOUT.index(Props['layout/layout-set'])+1)%len(LAYOUT)]))
 main_win.connect('delete-event', lambda *X: main_quit())
 
 
-main_win.add(box1)
-box1.pack_start(paned1)
-paned1.pack1(ScrolledWidget(savedsearches_view))
-paned1.pack2(paned2)
-paned2.pack1(box2)
-paned2.pack2(box3)
-box3.pack_start(ScrolledWidget(taskbody_view))
-box3.pack_start(completion_suggestions_box, expand=False)
-box3.pack_start(box4, expand=False)
-box4.pack_start(calendar)
-box2.pack_start(searchbox, expand=False)
-box2.pack_start(ScrolledWidget(tasklist_view))
+box_main = gtk.HBox()
+main_win.add(box_main)
+box_savedsearches = ScrolledWidget(savedsearches_view)
+box_tasklist = gtk.VBox()
+box_tasklist.pack_start(searchbox, expand=False)
+box_tasklist.pack_start(ScrolledWidget(tasklist_view))
+box_bottom = gtk.HBox()
+box_taskview = gtk.VBox()
+box_taskview.pack_start(ScrolledWidget(taskbody_view))
+box_taskview.pack_start(completion_suggestions_box, expand=False)
+box_auxtools = gtk.VBox()
+box_auxtools.pack_start(calendar)
 
-main_win.show_all()
-calendar.hide()
-completion_suggestions_box.hide()
+LAYOUT = ['3COL', '2COL1ROW', '1COL2ROW']
+def do_layout(layout):
+	def unpack(w):
+		p = w.get_parent()
+		if p is not None:
+			p.remove(w)
+	
+	unpack(paned1)
+	unpack(paned2h)
+	unpack(paned2v)
+	unpack(box_savedsearches)
+	unpack(box_tasklist)
+	unpack(box_bottom)
+	unpack(box_taskview)
+	unpack(box_auxtools)
+	
+	if layout not in LAYOUT:
+		sys.stderr.write("Unknown layout '%s', fallback to default\n" % layout)
+		layout = '3COL'
+	
+	if layout == '3COL':
+		"""
+		+--+--+--+
+		|  |  |  |
+		|  |  |  |
+		|  |  |  |
+		+--+--+--+
+		"""
+		box_main.pack_start(paned1)
+		paned1.pack1(box_savedsearches)
+		paned1.pack2(paned2h)
+		paned2h.pack1(box_tasklist)
+		paned2h.pack2(box_taskview)
+		box_taskview.pack_start(box_auxtools, expand=False)
+	elif layout == '2COL1ROW':
+		"""
+		+--+---+
+		|  |   |
+		+--+---+
+		|      |
+		+------+
+		"""
+		box_main.pack_start(paned2v)
+		paned2v.pack1(paned1)
+		paned1.pack1(box_savedsearches)
+		paned1.pack2(box_tasklist)
+		paned2v.pack2(box_bottom)
+		box_bottom.pack_start(box_taskview)
+		box_bottom.pack_start(box_auxtools, expand=False)
+	elif layout == '1COL2ROW':
+		"""
+		+--+---+
+		|  |   |
+		|  +---+
+		|  |   |
+		+--+---+
+		"""
+		box_main.pack_start(paned1)
+		paned1.pack1(box_savedsearches)
+		paned1.pack2(paned2v)
+		paned2v.pack1(box_tasklist)
+		paned2v.pack2(box_bottom)
+		box_bottom.pack_start(box_taskview)
+		box_bottom.pack_start(box_auxtools, expand=False)
+	
+	main_win.show_all()
+	calendar.hide()
+	completion_suggestions_box.hide()
+	Props['layout/layout-set'] = layout
+
+
+do_layout(Props['layout/layout-set'] or '3COL')
 searchbox.grab_focus()
 gtk.main()
