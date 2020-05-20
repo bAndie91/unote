@@ -104,7 +104,7 @@ class TextBuffer(gtk.TextBuffer):
 	def get_text_all(self):
 		return unicode(self.get_slice(self.get_start_iter(), self.get_end_iter(), include_hidden_chars=True))
 	def get_buffer_halves(self, textiter=None):
-		if textiter is None: textiter = self.get_cursor_iter()
+		if textiter is None: textiter = self.cursor_iter
 		return tuple(map(unicode, (self.get_slice(self.get_start_iter(), textiter, include_hidden_chars=True), self.get_slice(textiter, self.get_end_iter(), include_hidden_chars=True))))
 	def get_word_halves(self, textiter, word_re=None):
 		if word_re is None: word_re = r'\w'
@@ -122,13 +122,19 @@ class TextBuffer(gtk.TextBuffer):
 	def get_word(self, textiter, word_re=None):
 		return ''.join(self.get_word_halves(textiter, word_re=word_re))
 	def get_current_word(self, word_re=None):
-		return self.get_word(self.get_cursor_iter(), word_re=word_re)
-	def get_cursor_iter(self):
+		return self.get_word(self.cursor_iter, word_re=word_re)
+	@property
+	def cursor_iter(self):
 		return self.get_iter_at_mark(self.get_insert())
-	def get_current_position(self):
-		return len(self.get_buffer_halves()[0])
+	@property
+	def cursor_pos(self):
+		#return len(self.get_buffer_halves()[0])
+		return self.get_property('cursor-position')
+	@cursor_pos.setter
+	def cursor_pos(self, pos):
+		self.place_cursor(self.get_iter_at_offset(pos))
 	def replace_current_word(self, replacement, word_re=None):
-		start, end = self.get_word_boundaries(self.get_cursor_iter(), word_re)
+		start, end = self.get_word_boundaries(self.cursor_iter, word_re)
 		self.delete(start, end)
 		self.insert(start, replacement)
 	def connect(self, eventname, *args):
@@ -151,7 +157,7 @@ class TextBuffer(gtk.TextBuffer):
 	def replace_selected_text(self, replacement):
 		if self.get_has_selection():
 			self.delete_selection(False, True)
-			begin_offset = self.get_property('cursor-position')
+			begin_offset = self.cursor_pos
 			end_offset = begin_offset + len(replacement)
 			self.insert_at_cursor(replacement)
 			self.select_range(self.get_iter_at_offset(begin_offset), self.get_iter_at_offset(end_offset))
@@ -160,7 +166,7 @@ class TextBuffer(gtk.TextBuffer):
 		self.insert(self.get_iter_at_offset(start_offset), replacement)
 	def get_current_line_boundaries(self):
 		text = self.get_text_all()
-		cur = self.get_property('cursor-position')
+		cur = self.cursor_pos
 		sol = text.rfind('\n', 0, cur) + 1
 		eol = text.find('\n', cur)
 		if eol == -1: eol = len(text)
@@ -555,7 +561,7 @@ def process_tasklist():
 def save_position():
 	treeiter = taskbody_view.get_data('loaded-task-iter')
 	if treeiter is not None:
-		pos = taskbody_buffer.get_current_position()
+		pos = taskbody_buffer.cursor_pos
 		filepath = tasklist[treeiter]['file']
 		xattr.setxattr(filepath, 'user.textedit.cursor_position', str(pos))
 
@@ -656,9 +662,8 @@ def on_tasklist_selection_change(selection):
 			if e.errno == errno.ENODATA: pass
 			else: raise
 		else:
-			cursor_pos = int(cursor_pos)
 			if cursor_pos is not None:
-				taskbody_buffer.place_cursor(taskbody_buffer.get_iter_at_offset(cursor_pos))
+				taskbody_buffer.cursor_pos = int(cursor_pos)
 				taskbody_view.scroll_to_mark(taskbody_buffer.get_insert(), within_margin=0.33)
 
 def timer_once(sec, func, func_args=(), reschedule=True):
@@ -810,22 +815,18 @@ def on_taskbody_changed(*X):
 # define what counts as a word in task texts:
 taskbody_word_re = r'[#\w-]'
 
-def on_taskbody_typing(textbuffer, textiter, text, length):
+def on_taskbody_typing(textbuffer, textiter, typedtext, length):
 	first_half, second_half = textbuffer.get_word_halves(textiter, word_re=taskbody_word_re)
-	if re.search(taskbody_word_re + r'$', text):
-		c_word = first_half + text + second_half
-	else:
-		c_word = second_half
-	act_taskbody_word(c_word)
+	act_taskbody_word(first_half + second_half, len(first_half))
 
 def on_taskbody_erase(textbuffer, startiter, enditer):
 	first_half = textbuffer.get_word_halves(startiter, word_re=taskbody_word_re)[0]
 	second_half = textbuffer.get_word_halves(enditer, word_re=taskbody_word_re)[1]
 	c_word = first_half+second_half
-	act_taskbody_word(c_word)
+	act_taskbody_word(c_word, len(first_half))
 
-def act_taskbody_word(word):
-	if word.startswith('#'):
+def act_taskbody_word(word, pos):
+	if word.startswith('#') and pos>0:
 		completion_suggestions_box.show()
 		completion_suggestions_box.filter_for(word)
 	else:
@@ -917,7 +918,7 @@ def on_taskbody_view_keypress(widget, event):
 						taskbody_buffer.delete(taskbody_buffer.get_iter_at_offset(sol), taskbody_buffer.get_iter_at_offset(sol+1))
 			return True
 	if control and enter:
-		pos = taskbody_buffer.get_current_position()
+		pos = taskbody_buffer.cursor_pos
 		for start, end in find_markup_positions(taskbody_buffer.get_text_all(), 'link'):
 			if start <= pos < end:
 				link = taskbody_buffer.get_text_all()[start:end]
@@ -933,14 +934,14 @@ def on_taskbody_view_keypress(widget, event):
 		return True
 
 def on_taskbody_view_cursor_moved(Xtextview, Xstep_size, Xcount, Xextend_selection):
-	c_word = taskbody_buffer.get_current_word(word_re=taskbody_word_re)
-	act_taskbody_word(c_word)
+	first_half, second_half = taskbody_buffer.get_word_halves(taskbody_buffer.cursor_iter, word_re=taskbody_word_re)
+	act_taskbody_word(first_half + second_half, len(first_half))
 
 def taskbody_insert_line(s):
 	pre, post = taskbody_buffer.get_buffer_halves()
 	if pre[-1] != '\n': s = '\n' + s
 	if post == '' or post[0] != '\n': s = s + '\n'
-	taskbody_buffer.insert(taskbody_buffer.get_cursor_iter(), s)
+	taskbody_buffer.insert_at_cursor(s)
 
 def taskbody_remove_text_around_cursor(s):
 	"""removes first occurrance of s from taskbody_buffer before the cursor
@@ -1035,7 +1036,7 @@ tasklist_selection.connect('changed', on_tasklist_selection_change)
 
 taskbody_buffer = TextBuffer()
 taskbody_buffer.connect('changed', on_taskbody_changed)
-taskbody_buffer.connect('insert-text', on_taskbody_typing)
+taskbody_buffer.connect_after('insert-text', on_taskbody_typing)
 taskbody_buffer.connect('delete-range', on_taskbody_erase)
 
 taskbody_view = gtk.TextView(buffer=taskbody_buffer)
