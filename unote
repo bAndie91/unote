@@ -806,6 +806,10 @@ def on_searchbox_change(*X):
 	timer_once(0.4, filter_tasklist)
 	Props['field/search/text'] = searchbox.get_text()
 
+def on_searchbox_icon_clicked(entry, icon_pos, event):
+	if icon_pos == 1:
+		entry.set_text('')
+
 def successor_iter(model, predecessor):
 	"""return the next "heir" in line of succession metaphorically speaking.
 	i.e. the first child of the node if there is any, otherwise its next sibling node,
@@ -863,6 +867,19 @@ def save_search_query(query):
 
 def on_savedsearches_changed(*X):
 	Props['field/quicksearch/list'] = '\n'.join(filter(lambda x: x is not None, savedsearches.get_cells_by_column('query')))
+
+def on_savedsearches_mouseclick(widget, event):
+	if event.button == 3:
+		x, y = int(event.x), int(event.y)
+		t = savedsearches_view.get_path_at_pos(x, y)
+		if t is not None:
+			treepath, tv_col, cell_x, cell_y = t
+			savedquery = savedsearches[treepath]['query']
+			popup_menu = gtk.Menu()
+			popup_menu.append(ActionStockMenuItem(label=_("Remove '%s'")%savedquery, stock_id=gtk.STOCK_REMOVE, action=lambda *X: savedsearches.remove(savedsearches.get_iter(treepath))))
+			popup_menu.show_all()
+			popup_menu.popup(None, None, None, event.button, event.time)
+			return True
 
 def on_savedsearches_selection(selection):
 	Xmodel, iterpaths = selection.get_selected_rows()
@@ -1140,7 +1157,7 @@ paned2h.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: P
 paned2v.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/tasklist/height', paned.get_position())))
 
 savedsearches = TreeStore(('query', unicode))
-for query in (Props['field/quicksearch/list'] or '').split('\n'):
+for query in filter(lambda query: query != '', map(lambda query: query.strip(), (Props['field/quicksearch/list'] or '').split('\n'))):
 	savedsearches.append(None, {'query': query})
 savedsearches.connect('changed', on_savedsearches_changed)
 savedsearches_view = gtk.TreeView(savedsearches)
@@ -1148,14 +1165,17 @@ add_treeview_columns(savedsearches_view, [(_("Search"), 'text', savedsearches.ge
 savedsearches_view.set_reorderable(True)
 savedsearches_view.set_headers_clickable(True)
 savedsearches_view.get_selection().connect('changed', on_savedsearches_selection)
+savedsearches_view.connect('button-press-event', on_savedsearches_mouseclick)
 
 savedsearches_selection = savedsearches_view.get_selection()
 savedsearches_selection.set_mode(gtk.SELECTION_MULTIPLE)
 
 searchbox = gtk.Entry()
 searchbox.set_text(Props.get('field/search/text', ''))
+searchbox.set_icon_from_stock(1, gtk.STOCK_CLEAR)
 searchbox.connect('changed', on_searchbox_change)
 searchbox.connect('key-press-event', on_searchbox_keypress)
+searchbox.connect('icon-release', on_searchbox_icon_clicked)
 
 tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('updated', str))
 tasklist_filtered = tasklist.filter_new()
