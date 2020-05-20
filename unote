@@ -86,6 +86,59 @@ class ScrolledWidget(gtk.ScrolledWindow):
 	def get_inner_widget(self):
 		return self.inner_widget
 
+
+class Patch(object):
+	"""
+	License: Public domain (CC0)
+	Author: Isaac Turner 2016/12/05
+	Source: https://gist.github.com/noporpoise/16e731849eb1231e86d78f9dfeca3abc
+	"""
+	import difflib
+	_no_eol = "\ No newline at end of file"
+	_hdr_pat = re.compile("^@@ -(\d+),?(\d+)? \+(\d+),?(\d+)? @@$")
+
+	@classmethod
+	def make_patch(selfclass, a, b):
+	  """
+	  Get unified string diff between two strings. Trims top two lines.
+	  Returns empty string if strings are identical.
+	  """
+	  diffs = selfclass.difflib.unified_diff(a.splitlines(True),b.splitlines(True),n=0)
+	  try: X, X = next(diffs),next(diffs)
+	  except StopIteration: pass
+	  return ''.join([d if d[-1] == '\n' else d+'\n'+selfclass._no_eol+'\n' for d in diffs])
+	
+	@classmethod
+	def apply_patch(selfclass, s, patch, revert=False):
+	  """
+	  Apply patch to string s to recover newer string.
+	  If revert is True, treat s as the newer string, recover older string.
+	  """
+	  s = s.splitlines(True)
+	  p = patch.splitlines(True)
+	  t = ''
+	  i = sl = 0
+	  (midx,sign) = (1,'+') if not revert else (3,'-')
+	  while i < len(p) and p[i].startswith(("---","+++")): i += 1 # skip header lines
+	  while i < len(p):
+	    m = selfclass._hdr_pat.match(p[i])
+	    if not m:
+	      raise Exception("Bad patch -- regex mismatch [line "+str(i)+"]")
+	    l = int(m.group(midx))-1 + (m.group(midx+1) == '0')
+	    if sl > l or l > len(s):
+	      raise Exception("Bad patch -- bad line num [line "+str(i)+"]")
+	    t += ''.join(s[sl:l])
+	    sl = l
+	    i += 1
+	    while i < len(p) and p[i][0] != '@':
+	      if i+1 < len(p) and p[i+1][0] == '\\': line = p[i][:-1]; i += 2
+	      else: line = p[i]; i += 1
+	      if len(line) > 0:
+	        if line[0] == sign or line[0] == ' ': t += line[1:]
+	        sl += (line[0] != sign)
+	  t += ''.join(s[sl:])
+	  return t
+
 class TextBuffer(gtk.TextBuffer):
 	def __init__(self, *args):
 		self._eventhandlers = []
@@ -97,6 +150,13 @@ class TextBuffer(gtk.TextBuffer):
 		self.create_tag('link', foreground='blue', underline=pango.UNDERLINE_SINGLE)
 		self.create_tag('hidden', invisible=True)
 		self.create_tag('alert', foreground='red')
+		self._changed_event_handle = super(self.__class__, self).connect('changed', self._undo_checkpoint)
+		self.reinit('')
+	def reinit(self, text=''):
+		self.set_text(text)
+		self.undo_stack = []
+		self.undo_stack_index = -1
+		self.undo_reference_content = text
 	def append(self, content):
 		self.insert(self.get_end_iter(), content)
 	def clear(self):
@@ -182,6 +242,47 @@ class TextBuffer(gtk.TextBuffer):
 		super(self.__class__, self).remove_all_tags(start, end)
 	def get_tag_by_name(self, tagname):
 		return self.get_tag_table().lookup(tagname)
+	def _undo_checkpoint(self, *X):
+		def chardistance(a, b):
+			import difflib
+			distance = 0
+			for change in difflib.ndiff(a, b):
+				if change[0] in ['+', '-']:
+					distance += 1
+			return distance
+		text = self.get_text_all()
+		if chardistance(self.undo_reference_content, text) > 12:
+			self.create_undo_checkpoint()
+	def create_undo_checkpoint(self):
+		text = self.get_text_all()
+		patch = Patch.make_patch(self.undo_reference_content, text)
+		if patch != '':
+			del self.undo_stack[self.undo_stack_index+1:]
+			self.undo_stack.append((patch, self.cursor_pos))
+			self.undo_stack_index += 1
+			self.undo_reference_content = text
+	def undo(self):
+		self.create_undo_checkpoint()
+		if self.undo_stack_index >= 0:
+			patch, pos = self.undo_stack[self.undo_stack_index]
+			replacement = Patch.apply_patch(self.get_text_all(), patch, revert=True)
+			self.handler_block(self._changed_event_handle)
+			self.set_text(replacement)
+			self.handler_unblock(self._changed_event_handle)
+			self.cursor_pos = pos
+			self.undo_stack_index -= 1
+			self.undo_reference_content = replacement
+	def redo(self):
+		self.create_undo_checkpoint()
+		if self.undo_stack_index < len(self.undo_stack) - 1:
+			patch, pos = self.undo_stack[self.undo_stack_index + 1]
+			replacement = Patch.apply_patch(self.get_text_all(), patch, revert=False)
+			self.handler_block(self._changed_event_handle)
+			self.set_text(replacement)
+			self.handler_unblock(self._changed_event_handle)
+			self.cursor_pos = pos
+			self.undo_stack_index += 1
+			self.undo_reference_content = replacement
 
 class CompletionSuggestionsBox(gtk.TextView):
 	def __init__(self, *args):
@@ -526,7 +627,8 @@ def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, tas
 		for s, e, hideranges in find_markup_positions(preview, 'bold'):
 			for s, e in hideranges:
 				preview = preview[0:s+charshift] + preview[e+charshift:]
-				charshift -= e-s
+				charshift -= e - s
+		preview += "\n"
 		head, body = preview.split("\n", 1)
 		body = re.sub(r'\n+', ' ', body)
 		body = body[0:255] + ('…' if len(body)>255 else '')
@@ -568,7 +670,7 @@ def save_position():
 def load_taskbody(text):
 	save_position()
 	taskbody_buffer.disable_events()
-	taskbody_buffer.set_text(text)
+	taskbody_buffer.reinit(text)
 	taskbody_buffer.enable_events()
 	parse_taskbody(text)
 	calendar.gotoday()
@@ -664,7 +766,7 @@ def on_tasklist_selection_change(selection):
 		else:
 			if cursor_pos is not None:
 				taskbody_buffer.cursor_pos = int(cursor_pos)
-				taskbody_view.scroll_to_mark(taskbody_buffer.get_insert(), within_margin=0.33)
+				act_taskbody_view_scroll_to_cursor()
 
 def timer_once(sec, func, func_args=(), reschedule=True):
 	iden = func.__name__
@@ -917,21 +1019,33 @@ def on_taskbody_view_keypress(widget, event):
 						sol, Xeol = taskbody_buffer.get_current_line_boundaries()
 						taskbody_buffer.delete(taskbody_buffer.get_iter_at_offset(sol), taskbody_buffer.get_iter_at_offset(sol+1))
 			return True
-	if control and enter:
-		pos = taskbody_buffer.cursor_pos
-		for start, end in find_markup_positions(taskbody_buffer.get_text_all(), 'link'):
-			if start <= pos < end:
-				link = taskbody_buffer.get_text_all()[start:end]
-				run_async('xdg-open', [link])
-				return True
-	if control and event.keyval == gtk.gdk.keyval_from_name('b'):
-		s = taskbody_buffer.get_selected_text()
-		if s.startswith('*') and s.endswith('*') and len(s)>2:
-			s = s[1:-1]
-		else:
-			s = '*' + s + '*'
-		taskbody_buffer.replace_selected_text(s)
-		return True
+	if control:
+		if enter:
+			pos = taskbody_buffer.cursor_pos
+			for start, end in find_markup_positions(taskbody_buffer.get_text_all(), 'link'):
+				if start <= pos < end:
+					link = taskbody_buffer.get_text_all()[start:end]
+					run_async('xdg-open', [link])
+					return True
+		elif event.keyval == gtk.gdk.keyval_from_name('b'):
+			s = taskbody_buffer.get_selected_text()
+			if s.startswith('*') and s.endswith('*') and len(s)>2:
+				s = s[1:-1]
+			else:
+				s = '*' + s + '*'
+			taskbody_buffer.replace_selected_text(s)
+			return True
+		elif event.keyval == gtk.gdk.keyval_from_name('y') or (event.keyval == gtk.gdk.keyval_from_name('z') and shift):
+			taskbody_buffer.redo()
+			act_taskbody_view_scroll_to_cursor()
+			return True
+		elif event.keyval == gtk.gdk.keyval_from_name('z'):
+			taskbody_buffer.undo()
+			act_taskbody_view_scroll_to_cursor()
+			return True
+
+def act_taskbody_view_scroll_to_cursor():
+	taskbody_view.scroll_to_mark(taskbody_buffer.get_insert(), within_margin=0.33)
 
 def on_taskbody_view_cursor_moved(Xtextview, Xstep_size, Xcount, Xextend_selection):
 	first_half, second_half = taskbody_buffer.get_word_halves(taskbody_buffer.cursor_iter, word_re=taskbody_word_re)
@@ -972,7 +1086,7 @@ def act_new_task():
 	save_position()
 	tasklist_selection.unselect_all()
 	taskbody_view.set_data('loaded-task-iter', None)
-	taskbody_buffer.clear()
+	taskbody_buffer.reinit("")
 	taskbody_view.grab_focus()
 
 
@@ -1054,6 +1168,7 @@ calendar.connect('mark-removed', lambda X, date: taskbody_remove_text_around_cur
 
 add_key_binding(main_win, '<Control>q', lambda *X: main_quit())
 add_key_binding(main_win, '<Control>f', lambda *X: searchbox.grab_focus())
+add_key_binding(main_win, '<Control>t', lambda *X: taskbody_view.grab_focus())
 add_key_binding(main_win, '<Control>n', lambda *X: act_new_task())
 add_key_binding(main_win, '<Control><Shift>l', lambda *X: do_layout(LAYOUT[(LAYOUT.index(Props['layout/layout-set'])+1)%len(LAYOUT)]))
 add_key_binding(main_win, '<Control><Shift>w', taskbody_view_toggle_wrap)
