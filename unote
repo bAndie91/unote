@@ -23,6 +23,14 @@ TODO_DIR = './test-todo.d'
 TODOFILE_EXCLUDES = ['*~', '*.bak']
 
 
+def getsizeofrecursive(x):
+	size = 0
+	if hasattr(x, '__iter__'):
+		for y in x: size += getsizeofrecursive(y)
+	else:
+		size += sys.getsizeof(x)
+	return size
+
 def mkdir(path):
 	if os.path.exists(path) or path == '':
 		return
@@ -140,6 +148,8 @@ class Patch(object):
 	  return t
 
 class TextBuffer(gtk.TextBuffer):
+	undo_stack_size_limit = 2*1024*1024
+	
 	def __init__(self, *args):
 		self._eventhandlers = []
 		super(self.__class__, self).__init__(*args)
@@ -261,6 +271,9 @@ class TextBuffer(gtk.TextBuffer):
 			self.undo_stack.append((patch, self.cursor_pos))
 			self.undo_stack_index += 1
 			self.undo_reference_content = text
+			while getsizeofrecursive(self.undo_stack) > self.undo_stack_size_limit:
+				del self.undo_stack[0]
+				self.undo_stack_index -= 1
 	def undo(self):
 		self.create_undo_checkpoint()
 		if self.undo_stack_index >= 0:
