@@ -255,7 +255,7 @@ class TreeStore(gtk.TreeStore):
 	def to_unicode(s):
 		return unicode(s)
 	def get_column_num(self, col_name):
-		return self.column.get(col_name)
+		return self.column[col_name]
 	def get(self, row, *columns):
 		if type(row) == tuple:
 			row = self.get_iter(row)  # tree iterator path was given
@@ -302,6 +302,11 @@ class TreeStore(gtk.TreeStore):
 			for col_name, value in cols.iteritems():
 				itempairs.extend([self.get_column_num(col_name), value])
 		super(self.__class__, self).set(treeiter, *itempairs)
+	def get_cells_by_column(self, col_name):
+		row = self.get_iter_root()
+		while row is not None:
+			yield self[row][col_name]
+			row = successor_iter(self, row)
 
 class Calendar(gtk.Calendar):
 	__gsignals__ = {
@@ -680,24 +685,40 @@ def on_searchbox_change(*X):
 	timer_once(0.5, filter_tasklist)
 	Props['field/search/text'] = searchbox.get_text()
 
+def successor_iter(model, predecessor):
+	"""return the next "heir" in line of succession metaphorically speaking.
+	i.e. the first child of the node if there is any, otherwise its next sibling node,
+	otherwise its parent node's next sibling."""
+	if model.iter_has_child(predecessor):
+		return model.iter_nth_child(predecessor, 0)
+	else:
+		successor = model.iter_next(predecessor)
+		if successor is None:
+			while True:
+				parent = model.iter_parent(predecessor)
+				if parent is None: return None
+				uncle = model.iter_next(parent)
+				if uncle is not None: return uncle
+				predecessor = parent
+			return None
+		return successor
+
 def on_searchbox_keypress(widget, event):
-	shiftup = shiftdown = False
+	modup = moddown = False
 	if event.state & (gtk.gdk.SHIFT_MASK|gtk.gdk.MOD1_MASK) != 0:
-		shiftup = event.keyval == gtk.gdk.keyval_from_name('Up')
-		shiftdown = event.keyval == gtk.gdk.keyval_from_name('Down')
-	if shiftup or shiftdown:
+		modup = event.keyval == gtk.gdk.keyval_from_name('Up')
+		moddown = event.keyval == gtk.gdk.keyval_from_name('Down')
+	if modup or moddown:
 		Xmodel, s_rows = tasklist_selection.get_selected_rows()
 		if len(s_rows) == 0:
 			c_iter = None
 			s_iter = tasklist_filtered.get_iter_root()
 		else:
-			c_iter = tasklist_filtered.get_iter(s_rows[0 if shiftup else -1])
+			c_iter = tasklist_filtered.get_iter(s_rows[0 if modup else -1])
 		if c_iter is not None:
-			def successor_iter(model, predecessor):
-				return model.iter_nth_child(predecessor, 0) if model.iter_has_child(predecessor) else model.iter_next(predecessor)
-			if shiftdown:
+			if moddown:
 				s_iter = successor_iter(tasklist_filtered, c_iter) or c_iter
-			elif shiftup:
+			elif modup:
 				predecessor = tasklist_filtered.get_iter_root()
 				while predecessor is not None:
 					successor = successor_iter(tasklist_filtered, predecessor)
@@ -711,6 +732,12 @@ def on_searchbox_keypress(widget, event):
 		if s_iter is not None:
 			tasklist_selection.unselect_all()
 			tasklist_selection.select_iter(s_iter)
+	if event.state & gtk.gdk.CONTROL_MASK != 0 and event.keyval in [gtk.gdk.keyval_from_name('Enter'), gtk.gdk.keyval_from_name('Return')]:
+		save_search_query(searchbox.get_text())
+
+def save_search_query(query):
+	if query != '' and query not in savedsearches.get_cells_by_column('query'):
+		savedsearches.append(None, [query])
 
 def filter_tasklist():
 	tasklist_filtered.refilter()
