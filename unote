@@ -14,6 +14,8 @@ import os
 import xdg.BaseDirectory
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+import xattr
+import errno
 
 
 APPNAME = 'unote'
@@ -434,6 +436,7 @@ def add_treeview_columns(treeview, columns):
 		tvc.connect('notify::width', lambda widget, prop: Props.__setitem__('layout/column/%s/width'%widget.get_title(), widget.get_width()))
 
 def main_quit():
+	save_position()
 	# execute outstanding timers
 	for iden in Timers.keys():
 		glib.source_remove(Timers[iden]['handle'])
@@ -544,7 +547,15 @@ def process_tasklist():
 	tasklist.foreach(process_tasklist_taskitem)
 	completion_suggestions_box.set_items(AllTags.keys())
 
+def save_position():
+	treeiter = taskbody_view.get_data('loaded-task-iter')
+	if treeiter is not None:
+		pos = taskbody_buffer.get_current_position()
+		filepath = tasklist[treeiter]['file']
+		xattr.setxattr(filepath, 'user.textedit.cursor_position', str(pos))
+
 def load_taskbody(text):
+	save_position()
 	taskbody_buffer.disable_events()
 	taskbody_buffer.set_text(text)
 	taskbody_buffer.enable_events()
@@ -571,6 +582,8 @@ def find_markup_positions(text, markupname):
 		first_eol = text.find('\n')
 		if first_eol > -1:
 			yield 0, first_eol, []
+		else:
+			yield 0, len(text), []
 	elif markupname == 'link':
 		for match in re.finditer(r'\b([a-z+-]+://[^\s]+)', text, re.I):
 			yield match.start(0), match.end(0), []
@@ -632,6 +645,16 @@ def on_tasklist_selection_change(selection):
 		load_taskbody(task_text)
 		taskbody_view.set_data('loaded-task-iter', treeiter)
 		Props['history/last/opened-task/path'] = tasklist[treeiter]['file']
+		try:
+			cursor_pos = xattr.getxattr(tasklist[treeiter]['file'], 'user.textedit.cursor_position')
+		except IOError as e:
+			if e.errno == errno.ENODATA: pass
+			else: raise
+		else:
+			cursor_pos = int(cursor_pos)
+			if cursor_pos is not None:
+				taskbody_buffer.place_cursor(taskbody_buffer.get_iter_at_offset(cursor_pos))
+				taskbody_view.scroll_to_mark(taskbody_buffer.get_insert(), within_margin=0.33)
 
 def timer_once(sec, func, func_args=(), reschedule=True):
 	iden = func.__name__
@@ -748,8 +771,10 @@ def on_taskbody_changed(*X):
 		m = re.search(r'^\s*(.+?)\n', text)
 		if not m: return
 		first_line = m.group(1)
-		filepath = find_nonexistent_file(TODO_DIR, filenameize(first_line))
+		filepath = find_nonexistent_file(TODO_DIR, filenameize(first_line) + '.note.txt')
+		open(filepath, 'a').write('')
 		treeiter = tasklist.append(None, {'file': filepath})
+		taskbody_view.set_data('loaded-task-iter', treeiter)
 	update_task_in_list(tasklist, treeiter, task_text=text, task_mtime=time.time())
 	# schedule save
 	timer_once(5.0, save_task, (treeiter,), reschedule=False)
@@ -916,6 +941,7 @@ def taskbody_remove_text_around_cursor(s):
 	taskbody_buffer.replace_text(remove_from_pos, remove_length, '')
 
 def act_new_task():
+	save_position()
 	tasklist_selection.unselect_all()
 	taskbody_view.set_data('loaded-task-iter', None)
 	taskbody_buffer.clear()
