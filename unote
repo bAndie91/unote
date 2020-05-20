@@ -94,8 +94,8 @@ class Patch(object):
 	Source: https://gist.github.com/noporpoise/16e731849eb1231e86d78f9dfeca3abc
 	"""
 	import difflib
-	_no_eol = "\ No newline at end of file"
-	_hdr_pat = re.compile("^@@ -(\d+),?(\d+)? \+(\d+),?(\d+)? @@$")
+	_no_eol = '\ No newline at end of file'
+	_hdr_pat = re.compile('^@@ -(\d+),?(\d+)? \+(\d+),?(\d+)? @@$')
 
 	@classmethod
 	def make_patch(selfclass, a, b):
@@ -338,6 +338,9 @@ class CompletionSuggestionsBox(gtk.TextView):
 		self.filter_for(self._filterer_word)
 
 class TreeStore(gtk.TreeStore):
+	__gsignals__ = {
+		'changed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()),
+	}
 	def __init__(self, *columns):
 		self.column = {}
 		self.reader = {}
@@ -358,8 +361,13 @@ class TreeStore(gtk.TreeStore):
 			self.column[col_name] = n
 			n += 1
 		super(self.__class__, self).__init__(*types)
+		for event in 'row-changed', 'row-deleted', 'row-inserted', 'rows-reordered':
+			self.connect_after(event, self._on_change, event)
+	def _on_change(self, *X):
+		self.emit('changed')
 	@staticmethod
 	def to_unicode(s):
+		if s is None: return None
 		return unicode(s)
 	def get_column_num(self, col_name):
 		return self.column[col_name]
@@ -628,8 +636,8 @@ def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, tas
 			for s, e in hideranges:
 				preview = preview[0:s+charshift] + preview[e+charshift:]
 				charshift -= e - s
-		preview += "\n"
-		head, body = preview.split("\n", 1)
+		preview += '\n'
+		head, body = preview.split('\n', 1)
 		body = re.sub(r'\n+', ' ', body)
 		body = body[0:255] + ('…' if len(body)>255 else '')
 		row['headline_markup'] = '%s <span foreground="grey">%s</span>' % (glib.markup_escape_text(head), glib.markup_escape_text(body))
@@ -795,7 +803,7 @@ def timer_call(iden, func, args):
 	return False
 
 def on_searchbox_change(*X):
-	timer_once(0.5, filter_tasklist)
+	timer_once(0.4, filter_tasklist)
 	Props['field/search/text'] = searchbox.get_text()
 
 def successor_iter(model, predecessor):
@@ -849,8 +857,18 @@ def on_searchbox_keypress(widget, event):
 		save_search_query(searchbox.get_text())
 
 def save_search_query(query):
+	query = query.strip()
 	if query != '' and query not in savedsearches.get_cells_by_column('query'):
 		savedsearches.append(None, [query])
+
+def on_savedsearches_changed(*X):
+	Props['field/quicksearch/list'] = '\n'.join(filter(lambda x: x is not None, savedsearches.get_cells_by_column('query')))
+
+def on_savedsearches_selection(selection):
+	Xmodel, iterpaths = selection.get_selected_rows()
+	if len(iterpaths) > 0:
+		new_query = ' '.join([savedsearches[iterpath]['query'] for iterpath in iterpaths])
+		searchbox.set_text(new_query)
 
 def filter_tasklist():
 	tasklist_filtered.refilter()
@@ -1122,10 +1140,14 @@ paned2h.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: P
 paned2v.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/tasklist/height', paned.get_position())))
 
 savedsearches = TreeStore(('query', unicode))
+for query in (Props['field/quicksearch/list'] or '').split('\n'):
+	savedsearches.append(None, {'query': query})
+savedsearches.connect('changed', on_savedsearches_changed)
 savedsearches_view = gtk.TreeView(savedsearches)
 add_treeview_columns(savedsearches_view, [(_("Search"), 'text', savedsearches.get_column_num('query'))])
 savedsearches_view.set_reorderable(True)
 savedsearches_view.set_headers_clickable(True)
+savedsearches_view.get_selection().connect('changed', on_savedsearches_selection)
 
 savedsearches_selection = savedsearches_view.get_selection()
 savedsearches_selection.set_mode(gtk.SELECTION_MULTIPLE)
