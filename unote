@@ -752,21 +752,27 @@ def parse_taskbody(text):
 
 def on_tasklist_selection_change(selection):
 	Xmodel, iterpaths = selection.get_selected_rows()
-	for iterpath in iterpaths:
-		treeiter = tasklist.get_iter(iterpath)
-		task_text = tasklist[treeiter]['raw_text']
-		load_taskbody(task_text)
-		taskbody_view.set_data('loaded-task-iter', treeiter)
-		Props['history/last/opened-task/path'] = tasklist[treeiter]['file']
-		try:
-			cursor_pos = xattr.getxattr(tasklist[treeiter]['file'], 'user.textedit.cursor_position')
-		except IOError as e:
-			if e.errno == errno.ENODATA: pass
-			else: raise
-		else:
-			if cursor_pos is not None:
-				taskbody_buffer.cursor_pos = int(cursor_pos)
-				act_taskbody_view_scroll_to_cursor()
+	if len(iterpaths) == 0:
+		return
+	iterpath = iterpaths[0]
+	c_iter = taskbody_view.get_data('loaded-task-iter')
+	if c_iter is not None and tasklist.get_path(c_iter) == iterpath:
+		return
+	treeiter = tasklist.get_iter(iterpath)
+	task_text = tasklist[treeiter]['raw_text']
+	load_taskbody(task_text)
+	taskbody_view.set_data('loaded-task-iter', treeiter)
+	Props['history/last/opened-task/path'] = tasklist[treeiter]['file']
+	# restore cursor position:
+	try:
+		cursor_pos = xattr.getxattr(tasklist[treeiter]['file'], 'user.textedit.cursor_position')
+	except IOError as e:
+		if e.errno == errno.ENODATA: pass
+		else: raise
+	else:
+		if cursor_pos is not None:
+			taskbody_buffer.cursor_pos = int(cursor_pos)
+			act_taskbody_view_scroll_to_cursor()
 
 def timer_once(sec, func, func_args=(), reschedule=True):
 	iden = func.__name__
