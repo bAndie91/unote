@@ -292,6 +292,14 @@ class TreeStore(gtk.TreeStore):
 			for col_name, value in cols.iteritems():
 				row[self.get_column_num(col_name)] = value
 		return super(self.__class__, self).append(parent, row)
+	def set(self, treeiter, *itempairs):
+		if len(itempairs) == 0: return
+		if type(itempairs[0]) == dict:
+			cols = itempairs[0]
+			itempairs = []
+			for col_name, value in cols.iteritems():
+				itempairs.extend([self.get_column_num(col_name), value])
+		super(self.__class__, self).set(treeiter, *itempairs)
 
 class Calendar(gtk.Calendar):
 	__gsignals__ = {
@@ -496,26 +504,31 @@ def load_tasks():
 def get_tags(text):
 	return re.findall(r'(?:^|\s|,)(#[\w-]+)', text, re.I|re.U)
 
-def load_tasklist():
-	tasklist.clear()
-	for task_text, task_file, task_mtime in load_tasks():
+def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, task_mtime=None):
+	row = {}
+	if task_text is not None:
 		preview = task_text
-		shift = 0
+		charshift = 0
 		for s, e, hideranges in find_markup_positions(preview, 'bold'):
 			for s, e in hideranges:
-				preview = preview[0:s+shift] + preview[e+shift:]
-				shift -= e-s
+				preview = preview[0:s+charshift] + preview[e+charshift:]
+				charshift -= e-s
 		head, body = preview.split("\n", 1)
 		body = re.sub(r'\n+', ' ', body)
 		body = body[0:255] + ('…' if len(body)>255 else '')
-		task_headline_markup = '%s <span foreground="grey">%s</span>' % (glib.markup_escape_text(head), glib.markup_escape_text(body))
-		modified = time.strftime('%F %H:%M', time.localtime(task_mtime))
-		treeiter = tasklist.append(None, {
-			'headline_markup': task_headline_markup,
-			'raw_text': task_text,
-			'file': task_file,
-			'updated': modified,
-		})
+		row['headline_markup'] = '%s <span foreground="grey">%s</span>' % (glib.markup_escape_text(head), glib.markup_escape_text(body))
+		row['raw_text'] = task_text
+	if task_file is not None:
+		row['file'] = task_file
+	if task_mtime is not None:
+		row['updated'] = time.strftime('%F %H:%M', time.localtime(task_mtime))
+	treestore.set(treeiter, row)
+
+def load_tasklist():
+	tasklist.clear()
+	for task_text, task_file, task_mtime in load_tasks():
+		treeiter = tasklist.append(None, {})
+		update_task_in_list(tasklist, treeiter, task_text, task_file, task_mtime)
 		if task_file == Props['history/last/opened-task/path']:
 			tasklist_selection.select_path(tasklist.get_path(treeiter))
 
@@ -620,11 +633,14 @@ def on_tasklist_selection_change(selection):
 		taskbody_view.set_data('loaded-task-iter', treeiter)
 		Props['history/last/opened-task/path'] = tasklist[treeiter]['file']
 
-def timer_once(sec, func, func_args=()):
+def timer_once(sec, func, func_args=(), reschedule=True):
 	iden = func.__name__
 	if Timers.has_key(iden):
-		glib.source_remove(Timers[iden]['handle'])
-		del Timers[iden]
+		if reschedule:
+			glib.source_remove(Timers[iden]['handle'])
+			del Timers[iden]
+		else:
+			return
 	if func is not None:
 		Timers[iden] = {
 			'handle': glib.timeout_add(int(sec*1000), timer_call, iden, func, func_args),
@@ -734,9 +750,9 @@ def on_taskbody_changed(*X):
 		first_line = m.group(1)
 		filepath = find_nonexistent_file(TODO_DIR, filenameize(first_line))
 		treeiter = tasklist.append(None, {'file': filepath})
-	tasklist[treeiter]['raw_text'] = text
+	update_task_in_list(tasklist, treeiter, task_text=text, task_mtime=time.time())
 	# schedule save
-	timer_once(5.0, save_task, (treeiter,))
+	timer_once(5.0, save_task, (treeiter,), reschedule=False)
 
 
 # define what counts as a word in task texts:
