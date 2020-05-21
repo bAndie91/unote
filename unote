@@ -17,6 +17,7 @@ from dateutil.relativedelta import relativedelta
 import xattr
 import errno
 import traceback
+import inotifyx
 
 
 APPNAME = 'unote'
@@ -422,6 +423,8 @@ class TreeStore(gtk.TreeStore):
 	def get(self, row, *columns):
 		if type(row) == tuple:
 			row = self.get_iter(row)  # tree iterator path was given
+		if len(columns) == 0:
+			return tuple()
 		columns = list(columns)
 		for i, col in enumerate(columns):
 			if isinstance(col, basestring):
@@ -469,6 +472,13 @@ class TreeStore(gtk.TreeStore):
 		row = self.get_iter_root()
 		while row is not None:
 			yield self[row][col_name]
+			row = successor_iter(self, row)
+	def iterate_columns(self, *columns):
+		row = self.get_iter_root()
+		while row is not None:
+			answer = [row.copy()]
+			answer.extend(self.get(row, *columns))
+			yield answer
 			row = successor_iter(self, row)
 
 class TreeView(gtk.TreeView):
@@ -643,6 +653,10 @@ def program_start(widget, event):
 	widget.disconnect(start_event_handle)
 	main_win.connect('configure-event', on_window_configure)
 	load_tasklist()
+	# load last opened task
+	for treeiter, task_file in tasklist.iterate_columns('file'):
+		if task_file == Props['history/last/opened-task/path']:
+			tasklist_selection.select_path(tasklist.get_path(treeiter))
 
 class PropertyTree(dict):
 	def __init__(self, *args):
@@ -683,6 +697,11 @@ def getprops(*props):
 	for prop in props:
 		values.append(Props[prop])
 	return values
+
+def on_notes_dir_changed(fd, Xcondition):
+	inotifyx.get_events(fd)
+	load_tasklist()
+	return True
 
 def load_tasks():
 	for dirpath, dirnames, filenames in os.walk(os.path.expanduser(NOTES_DIR), topdown=True, onerror=None, followlinks=True):
@@ -729,8 +748,6 @@ def load_tasklist():
 	for task_text, task_file, task_mtime in load_tasks():
 		treeiter = tasklist.append(None, {})
 		update_task_in_list(tasklist, treeiter, task_text, task_file, task_mtime)
-		if task_file == Props['history/last/opened-task/path']:
-			tasklist_selection.select_path(tasklist.get_path(treeiter))
 
 def on_tasklist_changed(*X):
 	timer_once(0.2, process_tasklist)
@@ -745,10 +762,9 @@ def process_tasklist():
 	completion_suggestions_box.set_items(AllTags.keys())
 
 def save_position():
-	treeiter = taskbody_view.get_data('loaded-task-iter')
-	if treeiter is not None:
+	filepath = taskbody_view.get_data('loaded-task-file')
+	if filepath is not None:
 		pos = taskbody_buffer.cursor_pos
-		filepath = tasklist[treeiter]['file']
 		try:
 			xattr.setxattr(filepath, 'user.textedit.cursor_position', str(pos))
 		except IOError:
@@ -838,13 +854,13 @@ def on_tasklist_selection_change(selection):
 	if len(iterpaths) == 0:
 		return
 	iterpath = iterpaths[0]
-	c_iter = taskbody_view.get_data('loaded-task-iter')
-	if c_iter is not None and tasklist.get_path(c_iter) == iterpath:
+	loaded_task_file = taskbody_view.get_data('loaded-task-file')
+	if loaded_task_file is not None and loaded_task_file == tasklist[iterpath]['file']:
 		return
 	treeiter = tasklist.get_iter(iterpath)
 	task_text = tasklist[treeiter]['raw_text']
 	load_taskbody(task_text)
-	taskbody_view.set_data('loaded-task-iter', treeiter)
+	taskbody_view.set_data('loaded-task-file', tasklist[treeiter]['file'])
 	Props['history/last/opened-task/path'] = tasklist[treeiter]['file']
 	# restore cursor position:
 	try:
@@ -984,11 +1000,13 @@ def act_task_done(treepath):
 	subdir, subfile = os.path.split(subpath)
 	newpath = find_nonexistent_file(os.path.join(NOTES_ARCHIVE_DIR, subdir), subfile)
 	mkdir(os.path.dirname(newpath))
+	act_new_task()
 	os.rename(filepath, newpath)
 
 def act_task_delete(treepath):
 	filepath = tasklist[treepath]['file']
 	if question(_("Really delete?")+'\n<tt>'+glib.markup_escape_text(filepath)+'</tt>', stock_yes=(None, gtk.STOCK_DELETE), stock_no=(None, gtk.STOCK_CANCEL), parent=main_win):
+		act_new_task()
 		os.remove(filepath)
 
 def filter_tasklist():
@@ -1032,10 +1050,18 @@ def on_window_configure(widget, event):
 	for k, v in ('position/x', event.x), ('position/y', event.y), ('size/width', event.width), ('size/height', event.height):
 		Props['layout/window/%s' % k] = v
 
-def save_task(treeiter):
+def get_tasklist_treeiter_by_file(q_file):
+	treeiter = None
+	for c_iter, c_file in tasklist.iterate_columns('file'):
+		if c_file == q_file:
+			return c_iter
+	raise KeyError(_("No row with file=='%s'") % q_file)
+
+def save_task():
+	loaded_task_file = taskbody_view.get_data('loaded-task-file')
+	treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
 	text = tasklist[treeiter]['raw_text']
-	task_file = tasklist[treeiter]['file']
-	with open(task_file, 'w') as f:
+	with open(loaded_task_file, 'w') as f:
 		f.write(text)
 
 def on_taskbody_changed(*X):
@@ -1043,20 +1069,21 @@ def on_taskbody_changed(*X):
 	# re-parse
 	parse_taskbody(text)
 	# represent task text in the task list
-	treeiter = taskbody_view.get_data('loaded-task-iter')
-	if treeiter is None:
+	loaded_task_file = taskbody_view.get_data('loaded-task-file')
+	if loaded_task_file is None:
 		# don't save new task until at least one line is entered,
 		# and generate file name from the first line
 		m = re.search(r'^\s*(.+?)\n', text)
 		if not m: return
 		first_line = m.group(1)
 		filepath = find_nonexistent_file(NOTES_DIR, filenameize(first_line) + '.txt')
-		open(filepath, 'a').write('')
-		treeiter = tasklist.append(None, {'file': filepath})
-		taskbody_view.set_data('loaded-task-iter', treeiter)
-	update_task_in_list(tasklist, treeiter, task_text=text, task_mtime=time.time())
-	# schedule save
-	timer_once(5.0, save_task, (treeiter,), reschedule=False)
+		open(filepath, 'a').write(text)
+		taskbody_view.set_data('loaded-task-file', filepath)
+	else:
+		treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
+		update_task_in_list(tasklist, treeiter, task_text=text, task_mtime=time.time())
+		# schedule save
+		timer_once(5.0, save_task, [], reschedule=False)
 
 def on_taskbody_typing(textbuffer, textiter, typedtext, length):
 	first_half, second_half = textbuffer.get_word_halves(textiter, word_re=taskbody_word_re)
@@ -1244,7 +1271,7 @@ def taskbody_remove_text_around_cursor(s):
 def act_new_task():
 	save_position()
 	tasklist_selection.unselect_all()
-	taskbody_view.set_data('loaded-task-iter', None)
+	taskbody_view.set_data('loaded-task-file', None)
 	taskbody_buffer.reinit("")
 	taskbody_view.grab_focus()
 
@@ -1296,7 +1323,11 @@ searchbox.connect('key-press-event', on_searchbox_keypress)
 searchbox.connect('key-release-event', on_searchbox_keypressed)
 searchbox.connect('icon-release', on_searchbox_icon_clicked)
 
-tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('updated', str))
+directory_watcher = inotifyx.init()
+inotifyx.add_watch(directory_watcher, NOTES_DIR, inotifyx.IN_MODIFY | inotifyx.IN_CREATE | inotifyx.IN_DELETE | inotifyx.IN_MOVE)
+glib.io_add_watch(directory_watcher, glib.IO_IN|glib.IO_OUT, on_notes_dir_changed)
+
+tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('updated', str), ('due', str))
 tasklist_filtered = tasklist.filter_new()
 tasklist_filtered.set_visible_func(tasklist_filterer)
 tasklist.connect('row-changed', on_tasklist_changed)
@@ -1307,6 +1338,7 @@ tasklist_view = TreeView(tasklist_filtered)
 add_treeview_columns(tasklist_view, [
 	(_("Task"), 'markup', tasklist.get_column_num('headline_markup')),
 	(_("Updated"), 'text', tasklist.get_column_num('updated')),
+	(_("Due"), 'text', tasklist.get_column_num('due')),
 ])
 tasklist_view.set_reorderable(True)
 tasklist_view.set_headers_clickable(True)
