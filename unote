@@ -1059,10 +1059,11 @@ def get_tasklist_treeiter_by_file(q_file):
 
 def save_task():
 	loaded_task_file = taskbody_view.get_data('loaded-task-file')
-	treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
-	text = tasklist[treeiter]['raw_text']
-	with open(loaded_task_file, 'w') as f:
-		f.write(text)
+	if loaded_task_file is not None:
+		treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
+		text = tasklist[treeiter]['raw_text']
+		with open(loaded_task_file, 'w') as f:
+			f.write(text)
 
 def on_taskbody_changed(*X):
 	text = taskbody_buffer.get_text_all()
