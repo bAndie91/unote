@@ -19,8 +19,11 @@ import errno
 
 
 APPNAME = 'unote'
-TODO_DIR = './test-todo.d'
+TODO_DIR = os.path.expanduser('~/Notes')
 TODOFILE_EXCLUDES = ['*~', '*.bak']
+# define what counts as a word in task texts and search query text:
+taskbody_word_re = r'[#\w-]'
+
 
 
 def getsizeofrecursive(x):
@@ -147,7 +150,19 @@ class Patch(object):
 	  t += ''.join(s[sl:])
 	  return t
 
+def get_word_halves(text, pos, word_re=None):
+	if word_re is None: word_re = r'\w'
+	text_before, text_after = text[0:pos], text[pos:]
+	first_half = re.search(word_re + r'*\Z', text_before, re.U).group(0)
+	second_half = re.search(r'^'+word_re+r'*', text_after, re.U).group(0)
+	return first_half, second_half
+
+def current_word(text, pos, word_re=None):
+	return ''.join(get_word_halves(text, pos, word_re))
+
 class TextBuffer(gtk.TextBuffer):
+	# at least this many char addition+removal triggers an undo checkpoint:
+	undo_checkpoint_threshold = 12
 	undo_stack_size_limit = 2*1024*1024
 	
 	def __init__(self, *args):
@@ -176,12 +191,9 @@ class TextBuffer(gtk.TextBuffer):
 	def get_buffer_halves(self, textiter=None):
 		if textiter is None: textiter = self.cursor_iter
 		return tuple(map(unicode, (self.get_slice(self.get_start_iter(), textiter, include_hidden_chars=True), self.get_slice(textiter, self.get_end_iter(), include_hidden_chars=True))))
-	def get_word_halves(self, textiter, word_re=None):
-		if word_re is None: word_re = r'\w'
-		text_before, text_after = self.get_buffer_halves(textiter)
-		first_half = re.search(word_re + r'*\Z', text_before, re.U).group(0)
-		second_half = re.search(r'^'+word_re+r'*', text_after, re.U).group(0)
-		return first_half, second_half
+	def get_word_halves(self, textiter, word_re):
+		first_half, second_half = self.get_buffer_halves(textiter)
+		return get_word_halves(first_half+second_half, len(first_half), word_re)
 	def get_word_boundaries(self, textiter, word_re=None):
 		text_before, text_after = self.get_buffer_halves(textiter)
 		word_first_half, word_second_half = self.get_word_halves(textiter, word_re)
@@ -261,7 +273,7 @@ class TextBuffer(gtk.TextBuffer):
 					distance += 1
 			return distance
 		text = self.get_text_all()
-		if chardistance(self.undo_reference_content, text) > 12:
+		if chardistance(self.undo_reference_content, text) > self.undo_checkpoint_threshold:
 			self.create_undo_checkpoint()
 	def create_undo_checkpoint(self):
 		text = self.get_text_all()
@@ -312,7 +324,7 @@ class CompletionSuggestionsBox(gtk.TextView):
 		bgcolor = gtk.gdk.Color('lightgrey')
 		self.modify_base(gtk.STATE_NORMAL, bgcolor)
 	def filter_for(self, word):
-		last_suggestion = self.get_curret_suggestion()
+		last_suggestion = self.get_current_suggestion()
 		self._filterer_word = word
 		self._shown_items = filter(lambda item: self._filter_func(word, item), self._all_items)
 		idx = -1
@@ -329,13 +341,13 @@ class CompletionSuggestionsBox(gtk.TextView):
 		idx = self._suggestion_index + 1
 		if idx >= len(self._shown_items): idx = 0
 		self.set_suggestion_index(idx)
-		return self.get_curret_suggestion()
+		return self.get_current_suggestion()
 	def previous_suggestion(self):
 		idx = self._suggestion_index - 1
 		if idx < 0: idx = len(self._shown_items)-1
 		self.set_suggestion_index(idx)
-		return self.get_curret_suggestion()
-	def get_curret_suggestion(self):
+		return self.get_current_suggestion()
+	def get_current_suggestion(self):
 		if len(self._shown_items) == 0: return None
 		return self._shown_items[self._suggestion_index]
 	def set_suggestion_index(self, idx=-1):
@@ -703,15 +715,13 @@ def month_name_to_number(m):
 	return m
 
 def find_markup_positions(text, markupname):
-	def find_codeblocks(text):
-		# lines between 2 set of triple backticks
-		for match in re.finditer(r'^```[^\n]*\n(.*?)(?<=\n)```', text, re.S|re.M):
-			yield match.start(1), match.end(1), []
-	def find_codeinline(text):
-		# r'(?<!\\)(?:\\\\)*`(.*?(?<!\\)(?:\\\\)*)`'
+	def find_coderanges(text):
+		# lines between 2 set of triple backticks, and
 		# words embraced by backticks
-		for match in re.finditer(r'(?<!\w)`(.*?(?<!\\)(?:\\\\)*)`(?!\w)', text):
-			yield match.start(1), match.end(1), []
+		# (allow to escape first backtick: r'(?<!\\)(?:\\\\)*`(.*?(?<!\\)(?:\\\\)*)`')
+		for regex in r'^```[^\n]*\n(.*?)(?<=\n)```', r'(?<!\w)`(.*?(?<!\\)(?:\\\\)*)`(?!\w)':
+			for match in re.finditer(regex, text, re.S|re.M):
+				yield match.start(1), match.end(1), []
 	if markupname == 'headline':
 		first_eol = text.find('\n')
 		if first_eol > -1:
@@ -725,8 +735,7 @@ def find_markup_positions(text, markupname):
 		for match in re.finditer(ur'^\s*(?:-\s*)?(.+?)(\s+(DONE|WONTFIX|OBSOLETED)|\s*(✓|✔|✗|✘|\[(DONE|WONTFIX|OBSOLETED)\]))', text, re.U|re.M):
 			yield match.start(1), match.end(1), []
 	elif markupname in ['bold', 'alert']:
-		coderanges = [(s, e) for s, e, h in find_codeblocks(text)]
-		coderanges.extend([(s, e) for s, e, h in find_codeinline(text)])
+		coderanges = [(s, e) for s, e, h in find_coderanges(text)]
 		if markupname == 'bold':
 			# words embraced in asterisks, optionally surrounded by brackets or whitespace but nothing else
 			for match in re.finditer(r'(^|[\s\(\[\{\<])\*(?!\s|\*)(.+?)(?<!\s|\*)\*(?=[\s\)\]\}\>]|$)', text):
@@ -734,15 +743,14 @@ def find_markup_positions(text, markupname):
 				if all([end < s or start > e for s, e in coderanges]):
 					yield start, end, [(start-1, start), (end, end+1)]
 		elif markupname == 'alert':
-			# a line ending in double exclamation marks
-			for match in re.finditer(r'^\s*(?:-\s*)?(.+!!)\s*$', text, re.M):
-				start, end = match.start(1), match.end(1)
-				if all([end < s or start > e for s, e in coderanges]):
-					yield start, end, []
+			# a line ending in double exclamation marks, and literal string "<!>"
+			for regex in r'^\s*(?:-\s*)?(.+!!)\s*$', r'(<!>)':
+				for match in re.finditer(regex, text, re.M):
+					start, end = match.start(1), match.end(1)
+					if all([end < s or start > e for s, e in coderanges]):
+						yield start, end, []
 	elif markupname == 'code':
-		for start, end, hideranges in find_codeblocks(text):
-			yield start, end, hideranges
-		for start, end, hideranges in find_codeinline(text):
+		for start, end, hideranges in find_coderanges(text):
 			yield start, end, hideranges
 	else:
 		raise
@@ -842,21 +850,20 @@ def successor_iter(model, predecessor):
 		return successor
 
 def on_searchbox_keypress(widget, event):
-	modup = moddown = False
-	if event.state & (gtk.gdk.SHIFT_MASK|gtk.gdk.MOD1_MASK) != 0:
-		modup = event.keyval == gtk.gdk.keyval_from_name('Up')
-		moddown = event.keyval == gtk.gdk.keyval_from_name('Down')
-	if modup or moddown:
+	keys = KeyDetector(event)
+	mod_up = keys.up and (keys.alt or keys.shift)
+	mod_down = keys.down and (keys.alt or keys.shift)
+	if mod_up or mod_down:
 		Xmodel, s_rows = tasklist_selection.get_selected_rows()
 		if len(s_rows) == 0:
 			c_iter = None
 			s_iter = tasklist_filtered.get_iter_root()
 		else:
-			c_iter = tasklist_filtered.get_iter(s_rows[0 if modup else -1])
+			c_iter = tasklist_filtered.get_iter(s_rows[0 if mod_up else -1])
 		if c_iter is not None:
-			if moddown:
+			if mod_down:
 				s_iter = successor_iter(tasklist_filtered, c_iter) or c_iter
-			elif modup:
+			elif mod_up:
 				predecessor = tasklist_filtered.get_iter_root()
 				while predecessor is not None:
 					successor = successor_iter(tasklist_filtered, predecessor)
@@ -870,8 +877,22 @@ def on_searchbox_keypress(widget, event):
 		if s_iter is not None:
 			tasklist_selection.unselect_all()
 			tasklist_selection.select_iter(s_iter)
-	if event.state & gtk.gdk.CONTROL_MASK != 0 and event.keyval in [gtk.gdk.keyval_from_name('Enter'), gtk.gdk.keyval_from_name('Return')]:
+	if keys.control and keys.S:
 		save_search_query(searchbox.get_text())
+	if completion_suggestions_box.get_visible():
+		def complete_word(word):
+			print word
+		tab_completion_handled = handle_tab_completion(event, complete_word)
+		if tab_completion_handled is not None:
+			return tab_completion_handled
+
+def on_searchbox_keypressed(widget, event):
+	c_word = current_word(searchbox.get_text(), searchbox.get_property('cursor-position'), word_re=taskbody_word_re)
+	if c_word.startswith('#'):
+		completion_suggestions_box.show()
+		completion_suggestions_box.filter_for(c_word)
+	else:
+		completion_suggestions_box.hide()
 
 def save_search_query(query):
 	query = query.strip()
@@ -967,10 +988,6 @@ def on_taskbody_changed(*X):
 	# schedule save
 	timer_once(5.0, save_task, (treeiter,), reschedule=False)
 
-
-# define what counts as a word in task texts:
-taskbody_word_re = r'[#\w-]'
-
 def on_taskbody_typing(textbuffer, textiter, typedtext, length):
 	first_half, second_half = textbuffer.get_word_halves(textiter, word_re=taskbody_word_re)
 	act_taskbody_word(first_half + second_half, len(first_half))
@@ -1029,59 +1046,77 @@ def on_taskbody_view_menu(Xtextview, menu):
 	pos += 1
 	menu.show_all()
 
-def on_taskbody_view_keypress(widget, event):
-	tab = False
-	shift_tab = False
-	control = event.state & gtk.gdk.CONTROL_MASK != 0
-	shift = event.state & gtk.gdk.SHIFT_MASK != 0
-	alt = event.state & gtk.gdk.MOD1_MASK != 0
-	if not control and not alt:
-		tab = event.keyval == gtk.gdk.keyval_from_name('Tab') and not shift
-		shift_tab = (event.keyval == gtk.gdk.keyval_from_name('Tab') and shift) or event.keyval == gtk.gdk.keyval_from_name('ISO_Left_Tab')
-	enter = event.keyval in [gtk.gdk.keyval_from_name('Return'), gtk.gdk.keyval_from_name('Enter')]
-	if completion_suggestions_box.get_visible():
-		if tab:
-			completion_suggestions_box.next_suggestion()
-			return True  # prevent event propagation
-		elif shift_tab:
-			completion_suggestions_box.previous_suggestion()
-			return True
-		elif control and enter:
-			suggestion = completion_suggestions_box.get_curret_suggestion()
-			if suggestion is not None:
-				taskbody_buffer.replace_current_word(suggestion+' ', word_re=taskbody_word_re)
-				completion_suggestions_box.hide()
-				return True
-		elif event.keyval == gtk.gdk.keyval_from_name('Escape'):
+class KeyDetector(object):
+	def __init__(self, event):
+		self.tab = False
+		self.backtab = False
+		self.control = event.state & gtk.gdk.CONTROL_MASK != 0
+		self.shift = event.state & gtk.gdk.SHIFT_MASK != 0
+		self.alt = event.state & gtk.gdk.MOD1_MASK != 0
+		if not self.control and not self.alt:
+			self.tab = event.keyval == gtk.gdk.keyval_from_name('Tab') and not self.shift
+			self.backtab = (event.keyval == gtk.gdk.keyval_from_name('Tab') and self.shift) or event.keyval == gtk.gdk.keyval_from_name('ISO_Left_Tab')
+		self.enter = event.keyval in [gtk.gdk.keyval_from_name('Return'), gtk.gdk.keyval_from_name('Enter')]
+		self.escape = event.keyval == gtk.gdk.keyval_from_name('Escape')
+		self.up = event.keyval == gtk.gdk.keyval_from_name('Up')
+		self.down = event.keyval == gtk.gdk.keyval_from_name('Down')
+		for letter in map(chr, range(ord('a'), ord('z')+1)):
+			setattr(self, letter.upper(), event.keyval == gtk.gdk.keyval_from_name(letter))
+
+def handle_tab_completion(event, callback):
+	keys = KeyDetector(event)
+	if keys.tab:
+		completion_suggestions_box.next_suggestion()
+		return True  # prevent event propagation
+	elif keys.backtab:
+		completion_suggestions_box.previous_suggestion()
+		return True
+	elif keys.control and keys.enter:
+		suggestion = completion_suggestions_box.get_current_suggestion()
+		if suggestion is not None:
+			callback(suggestion)
 			completion_suggestions_box.hide()
 			return True
-	else:
-		if tab or shift_tab:
-			selected_text = taskbody_buffer.get_selected_text()
-			if selected_text != '':
-				if tab:
-					selected_text = re.sub(r'^(?=.)', '\t', selected_text, flags=re.M)
-				elif shift_tab:
-					selected_text = re.sub(r'^\t', '', selected_text, flags=re.M)
-				taskbody_buffer.replace_selected_text(selected_text)
-			else:
-				if tab:
-					return False
-				elif shift_tab:
-					line = taskbody_buffer.get_current_line()
-					if line.startswith('\t'):
-						sol, Xeol = taskbody_buffer.get_current_line_boundaries()
-						taskbody_buffer.delete(taskbody_buffer.get_iter_at_offset(sol), taskbody_buffer.get_iter_at_offset(sol+1))
-			return True
-	if control:
-		if enter:
+	return None
+
+def on_taskbody_view_keypress(widget, event):
+	keys = KeyDetector(event)
+	if completion_suggestions_box.get_visible():
+		def complete_word(word):
+			taskbody_buffer.replace_current_word(word+' ', word_re=taskbody_word_re)
+		tab_completion_handled = handle_tab_completion(event, callback=complete_word)
+		if tab_completion_handled is not None:
+			return tab_completion_handled
+	
+	if keys.escape:
+		completion_suggestions_box.hide()
+		return True
+	if keys.tab or keys.backtab:
+		selected_text = taskbody_buffer.get_selected_text()
+		if selected_text != '':
+			if keys.tab:
+				selected_text = re.sub(r'^(?=.)', '\t', selected_text, flags=re.M)
+			elif keys.backtab:
+				selected_text = re.sub(r'^\t', '', selected_text, flags=re.M)
+			taskbody_buffer.replace_selected_text(selected_text)
+		else:
+			if keys.tab:
+				return False
+			elif keys.backtab:
+				line = taskbody_buffer.get_current_line()
+				if line.startswith('\t'):
+					sol, Xeol = taskbody_buffer.get_current_line_boundaries()
+					taskbody_buffer.delete(taskbody_buffer.get_iter_at_offset(sol), taskbody_buffer.get_iter_at_offset(sol+1))
+		return True
+	if keys.control:
+		if keys.enter:
 			pos = taskbody_buffer.cursor_pos
 			for start, end in find_markup_positions(taskbody_buffer.get_text_all(), 'link'):
 				if start <= pos < end:
 					link = taskbody_buffer.get_text_all()[start:end]
 					run_async('xdg-open', [link])
 					return True
-		elif event.keyval == gtk.gdk.keyval_from_name('b'):
+		elif keys.B:
 			s = taskbody_buffer.get_selected_text()
 			if s.startswith('*') and s.endswith('*') and len(s)>2:
 				s = s[1:-1]
@@ -1089,11 +1124,11 @@ def on_taskbody_view_keypress(widget, event):
 				s = '*' + s + '*'
 			taskbody_buffer.replace_selected_text(s)
 			return True
-		elif event.keyval == gtk.gdk.keyval_from_name('y') or (event.keyval == gtk.gdk.keyval_from_name('z') and shift):
+		elif keys.Y or (keys.Z and keys.shift):
 			taskbody_buffer.redo()
 			act_taskbody_view_scroll_to_cursor()
 			return True
-		elif event.keyval == gtk.gdk.keyval_from_name('z'):
+		elif keys.Z:
 			taskbody_buffer.undo()
 			act_taskbody_view_scroll_to_cursor()
 			return True
@@ -1188,6 +1223,7 @@ searchbox.set_text(Props.get('field/search/text', ''))
 searchbox.set_icon_from_stock(1, gtk.STOCK_CLEAR)
 searchbox.connect('changed', on_searchbox_change)
 searchbox.connect('key-press-event', on_searchbox_keypress)
+searchbox.connect('key-release-event', on_searchbox_keypressed)
 searchbox.connect('icon-release', on_searchbox_icon_clicked)
 
 tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('updated', str))
