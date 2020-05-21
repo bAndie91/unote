@@ -16,14 +16,19 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import xattr
 import errno
+import traceback
 
 
 APPNAME = 'unote'
-TODO_DIR = os.path.expanduser('~/Notes')
-TODOFILE_EXCLUDES = ['*~', '*.bak']
+NOTES_DIR = os.path.expanduser('~/Notes')
+NOTES_ARCHIVE_DIR = os.path.expanduser('~/Notes/.Archive')
+NOTESFILE_EXCLUDES = ['*~', '*.bak']
 # define what counts as a word in task texts and search query text:
 taskbody_word_re = r'[#\w-]'
 
+
+NOTES_DIR = NOTES_DIR.rstrip('/')
+NOTES_ARCHIVE_DIR = NOTES_ARCHIVE_DIR.rstrip('/')
 
 
 def getsizeofrecursive(x):
@@ -82,6 +87,24 @@ def add_key_binding(widget, keyname, callback):
 	key, modifier = gtk.accelerator_parse(keyname)
 	accelgroup.connect_group(key, modifier, gtk.ACCEL_VISIBLE, callback)
 	widget.add_accel_group(accelgroup)
+
+def question(msg, stock_yes=None, stock_no=None, parent=None):
+	dlg = gtk.MessageDialog(parent, gtk.DIALOG_MODAL | gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO)
+	dlg.set_markup(msg)
+	dlg.set_title(_("Question"))
+	if stock_no is not None:
+		dlg.get_widget_for_response(gtk.RESPONSE_NO).hide()
+		btn_no = gtk.Button(label=stock_no[0], stock=stock_no[1])
+		dlg.add_action_widget(btn_no, gtk.RESPONSE_NO)
+		btn_no.show()
+	if stock_yes is not None:
+		dlg.get_widget_for_response(gtk.RESPONSE_YES).hide()
+		btn_yes = gtk.Button(label=stock_yes[0], stock=stock_yes[1])
+		dlg.add_action_widget(btn_yes, gtk.RESPONSE_YES)
+		btn_yes.show()
+	resp = dlg.run()
+	dlg.destroy()
+	return (resp == gtk.RESPONSE_YES)
 
 class ScrolledWidget(gtk.ScrolledWindow):
 	def __init__(self, widget):
@@ -662,9 +685,13 @@ def getprops(*props):
 	return values
 
 def load_tasks():
-	for dirpath, dirnames, filenames in os.walk(os.path.expanduser(TODO_DIR), topdown=False, onerror=None, followlinks=True):
+	for dirpath, dirnames, filenames in os.walk(os.path.expanduser(NOTES_DIR), topdown=True, onerror=None, followlinks=True):
+		for idx, dirname in enumerate(dirnames):
+			if dirname.startswith('.'):
+				# don't descent into hidden directories
+				del dirnames[idx]
 		for filename in filenames:
-			if any([fnmatch(filename, pattern) for pattern in TODOFILE_EXCLUDES]):
+			if any([fnmatch(filename, pattern) for pattern in NOTESFILE_EXCLUDES]):
 				continue
 			filepath = os.path.join(dirpath, filename)
 			mtime = os.stat(filepath).st_mtime
@@ -722,7 +749,10 @@ def save_position():
 	if treeiter is not None:
 		pos = taskbody_buffer.cursor_pos
 		filepath = tasklist[treeiter]['file']
-		xattr.setxattr(filepath, 'user.textedit.cursor_position', str(pos))
+		try:
+			xattr.setxattr(filepath, 'user.textedit.cursor_position', str(pos))
+		except IOError:
+			traceback.print_exc()
 
 def load_taskbody(text):
 	save_position()
@@ -946,10 +976,20 @@ def on_savedsearches_selection(selection):
 def on_tasklist_menu(treeview, popup_menu, treepath, tv_col, cell_x, cell_y):
 	if treepath is not None:
 		popup_menu.append(ActionStockMenuItem(label=_("Done"), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done(treepath)))
+		popup_menu.append(ActionStockMenuItem(label=_("Delete…"), stock_id=gtk.STOCK_DELETE, action=lambda *X: act_task_delete(treepath)))
 
 def act_task_done(treepath):
-	# TODO
-	print tasklist[treepath][0]
+	filepath = tasklist[treepath]['file']
+	subpath = filepath[len(NOTES_DIR)+1:]
+	subdir, subfile = os.path.split(subpath)
+	newpath = find_nonexistent_file(os.path.join(NOTES_ARCHIVE_DIR, subdir), subfile)
+	mkdir(os.path.dirname(newpath))
+	os.rename(filepath, newpath)
+
+def act_task_delete(treepath):
+	filepath = tasklist[treepath]['file']
+	if question(_("Really delete?")+'\n<tt>'+glib.markup_escape_text(filepath)+'</tt>', stock_yes=(None, gtk.STOCK_DELETE), stock_no=(None, gtk.STOCK_CANCEL), parent=main_win):
+		os.remove(filepath)
 
 def filter_tasklist():
 	tasklist_filtered.refilter()
@@ -1010,7 +1050,7 @@ def on_taskbody_changed(*X):
 		m = re.search(r'^\s*(.+?)\n', text)
 		if not m: return
 		first_line = m.group(1)
-		filepath = find_nonexistent_file(TODO_DIR, filenameize(first_line) + '.note.txt')
+		filepath = find_nonexistent_file(NOTES_DIR, filenameize(first_line) + '.txt')
 		open(filepath, 'a').write('')
 		treeiter = tasklist.append(None, {'file': filepath})
 		taskbody_view.set_data('loaded-task-iter', treeiter)
