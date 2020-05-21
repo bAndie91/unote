@@ -448,6 +448,29 @@ class TreeStore(gtk.TreeStore):
 			yield self[row][col_name]
 			row = successor_iter(self, row)
 
+class TreeView(gtk.TreeView):
+	__gsignals__ = {
+		'menu-popup': (gobject.SIGNAL_RUN_LAST, gobject.TYPE_BOOLEAN, (gobject.TYPE_PYOBJECT, gobject.TYPE_PYOBJECT, gobject.TYPE_PYOBJECT, gobject.TYPE_PYOBJECT, gobject.TYPE_PYOBJECT)),
+	}
+	def __init__(self, *args, **kvargs):
+		super(self.__class__, self).__init__(*args, **kvargs)
+		self.connect('button-press-event', self._on_button_click)
+	def _on_button_click(self, widget, event):
+		if event.button == 3:
+			x, y = int(event.x), int(event.y)
+			t = self.get_path_at_pos(x, y)
+			if t is not None:
+				treepath, tv_col, cell_x, cell_y = t
+			else:
+				treepath, tv_col, cell_x, cell_y = None, None, None, None
+			popup_menu = gtk.Menu()
+			if not self.emit('menu-popup', popup_menu, treepath, tv_col, cell_x, cell_y):
+				# event is not handled by any handlers, so do it ourself
+				if popup_menu.get_children():
+					popup_menu.show_all()
+					popup_menu.popup(None, None, None, event.button, event.time)
+			return True
+
 class Calendar(gtk.Calendar):
 	__gsignals__ = {
 		'marks-changed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()),
@@ -556,10 +579,11 @@ class Calendar(gtk.Calendar):
 		self.selected_day = self.get_date()
 
 class ActionStockMenuItem(gtk.ImageMenuItem):
-	def __init__(self, stock_id=None, accel_group=None, label=None, action=None):
+	def __init__(self, stock_id=None, accel_group=None, label=None, action=None, use_underline=False):
 		super(self.__class__, self).__init__(stock_id=stock_id, accel_group=accel_group)
 		if label is not None:
 			self.set_label(label)
+			self.set_use_underline(use_underline)
 		if action is not None:
 			self.connect('activate', action)
 
@@ -881,7 +905,13 @@ def on_searchbox_keypress(widget, event):
 		save_search_query(searchbox.get_text())
 	if completion_suggestions_box.get_visible():
 		def complete_word(word):
-			print word
+			old = searchbox.get_text()
+			pos = searchbox.get_property('cursor-position')
+			first_half, second_half = get_word_halves(old, pos, word_re=taskbody_word_re)
+			new_pre = old[0:pos-len(first_half)] + word + ' '
+			new_post = old[pos+len(second_half):]
+			searchbox.set_text(new_pre + new_post)
+			searchbox.set_position(len(new_pre))
 		tab_completion_handled = handle_tab_completion(event, complete_word)
 		if tab_completion_handled is not None:
 			return tab_completion_handled
@@ -902,24 +932,24 @@ def save_search_query(query):
 def on_savedsearches_changed(*X):
 	Props['field/quicksearch/list'] = '\n'.join(filter(lambda x: x is not None, savedsearches.get_cells_by_column('query')))
 
-def on_savedsearches_mouseclick(widget, event):
-	if event.button == 3:
-		x, y = int(event.x), int(event.y)
-		t = savedsearches_view.get_path_at_pos(x, y)
-		if t is not None:
-			treepath, tv_col, cell_x, cell_y = t
-			savedquery = savedsearches[treepath]['query']
-			popup_menu = gtk.Menu()
-			popup_menu.append(ActionStockMenuItem(label=_("Remove '%s'")%savedquery, stock_id=gtk.STOCK_REMOVE, action=lambda *X: savedsearches.remove(savedsearches.get_iter(treepath))))
-			popup_menu.show_all()
-			popup_menu.popup(None, None, None, event.button, event.time)
-			return True
+def on_savedsearches_menu(treeview, popup_menu, treepath, tv_col, cell_x, cell_y):
+	if treepath is not None:
+		savedquery = savedsearches[treepath]['query']
+		popup_menu.append(ActionStockMenuItem(label=_("Remove '%s'")%savedquery, stock_id=gtk.STOCK_REMOVE, action=lambda *X: savedsearches.remove(savedsearches.get_iter(treepath))))
 
 def on_savedsearches_selection(selection):
 	Xmodel, iterpaths = selection.get_selected_rows()
 	if len(iterpaths) > 0:
 		new_query = ' '.join([savedsearches[iterpath]['query'] for iterpath in iterpaths])
 		searchbox.set_text(new_query)
+
+def on_tasklist_menu(treeview, popup_menu, treepath, tv_col, cell_x, cell_y):
+	if treepath is not None:
+		popup_menu.append(ActionStockMenuItem(label=_("Done"), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done(treepath)))
+
+def act_task_done(treepath):
+	# TODO
+	print tasklist[treepath][0]
 
 def filter_tasklist():
 	tasklist_filtered.refilter()
@@ -1208,15 +1238,15 @@ savedsearches = TreeStore(('query', unicode))
 for query in filter(lambda query: query != '', map(lambda query: query.strip(), (Props['field/quicksearch/list'] or '').split('\n'))):
 	savedsearches.append(None, {'query': query})
 savedsearches.connect('changed', on_savedsearches_changed)
-savedsearches_view = gtk.TreeView(savedsearches)
+savedsearches_view = TreeView(savedsearches)
 add_treeview_columns(savedsearches_view, [(_("Search"), 'text', savedsearches.get_column_num('query'))])
 savedsearches_view.set_reorderable(True)
 savedsearches_view.set_headers_clickable(True)
-savedsearches_view.get_selection().connect('changed', on_savedsearches_selection)
-savedsearches_view.connect('button-press-event', on_savedsearches_mouseclick)
+savedsearches_view.connect('menu-popup', on_savedsearches_menu)
 
 savedsearches_selection = savedsearches_view.get_selection()
 savedsearches_selection.set_mode(gtk.SELECTION_MULTIPLE)
+savedsearches_selection.connect('changed', on_savedsearches_selection)
 
 searchbox = gtk.Entry()
 searchbox.set_text(Props.get('field/search/text', ''))
@@ -1233,13 +1263,14 @@ tasklist.connect('row-changed', on_tasklist_changed)
 tasklist.connect('row-deleted', on_tasklist_changed)
 tasklist.connect('row-inserted', on_tasklist_changed)
 
-tasklist_view = gtk.TreeView(tasklist_filtered)
+tasklist_view = TreeView(tasklist_filtered)
 add_treeview_columns(tasklist_view, [
 	(_("Task"), 'markup', tasklist.get_column_num('headline_markup')),
 	(_("Updated"), 'text', tasklist.get_column_num('updated')),
 ])
 tasklist_view.set_reorderable(True)
 tasklist_view.set_headers_clickable(True)
+tasklist_view.connect('menu-popup', on_tasklist_menu)
 
 tasklist_selection = tasklist_view.get_selection()
 tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
