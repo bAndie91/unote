@@ -1011,25 +1011,31 @@ def on_savedsearches_selection(selection):
 
 def on_tasklist_menu(treeview, popup_menu, treepath, tv_col, cell_x, cell_y):
 	if treepath is not None:
-		popup_menu.append(ActionStockMenuItem(label=_("Done"), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done(treepath)))
-		popup_menu.append(ActionStockMenuItem(label=_("Delete…"), stock_id=gtk.STOCK_DELETE, action=lambda *X: act_task_delete(treepath)))
+		clicked_rowpath = tasklist.rowpath_by_filtered_row(tasklist_filtered, treepath, key_column='file')
+		clicked_filepath = tasklist[clicked_rowpath]['file']
+		Xmodel, s_treepaths = tasklist_selection.get_selected_rows()
+		selected_filepaths = []
+		for s_treepath in s_treepaths:
+			selected_rowpath = tasklist.rowpath_by_filtered_row(tasklist_filtered, s_treepath, key_column='file')
+			selected_filepaths.append(tasklist[selected_rowpath]['file'])
+		popup_menu.append(ActionStockMenuItem(label=_("Done this"), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done([clicked_filepath])))
+		popup_menu.append(ActionStockMenuItem(label=_("Done selected (%d)")%len(selected_filepaths), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done(selected_filepaths)))
+		popup_menu.append(ActionStockMenuItem(label=_("Delete this…"), stock_id=gtk.STOCK_DELETE, action=lambda *X: act_task_delete([clicked_filepath])))
 
-def act_task_done(treefilter_treepath):
-	rowpath = tasklist.rowpath_by_filtered_row(tasklist_filtered, treefilter_treepath, key_column='file')
-	filepath = tasklist[rowpath]['file']
-	subpath = filepath[len(NOTES_DIR)+1:]
-	subdir, subfile = os.path.split(subpath)
-	newpath = find_nonexistent_file(os.path.join(NOTES_ARCHIVE_DIR, subdir), subfile)
-	mkdir(os.path.dirname(newpath))
-	act_new_task()
-	os.rename(filepath, newpath)
-
-def act_task_delete(treefilter_treepath):
-	rowpath = tasklist.rowpath_by_filtered_row(tasklist_filtered, treefilter_treepath, key_column='file')
-	filepath = tasklist[rowpath]['file']
-	if question(_("Really delete?")+'\n<tt>'+glib.markup_escape_text(filepath)+'</tt>', stock_yes=(None, gtk.STOCK_DELETE), stock_no=(None, gtk.STOCK_CANCEL), parent=main_win):
+def act_task_done(filepaths):
+	for filepath in filepaths:
+		subpath = filepath[len(NOTES_DIR)+1:]
+		subdir, subfile = os.path.split(subpath)
+		newpath = find_nonexistent_file(os.path.join(NOTES_ARCHIVE_DIR, subdir), subfile)
+		mkdir(os.path.dirname(newpath))
 		act_new_task()
-		os.remove(filepath)
+		os.rename(filepath, newpath)
+
+def act_task_delete(filepaths):
+	for filepath in filepaths:
+		if question(_("Really delete?")+'\n<tt>'+glib.markup_escape_text(filepath)+'</tt>', stock_yes=(None, gtk.STOCK_DELETE), stock_no=(None, gtk.STOCK_CANCEL), parent=main_win):
+			act_new_task()
+			os.remove(filepath)
 
 def filter_tasklist():
 	tasklist_filtered.refilter()
