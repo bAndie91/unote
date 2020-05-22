@@ -848,7 +848,7 @@ def find_markup_positions(text, markupname):
 		# lines between 2 set of triple backticks, and
 		# words embraced by backticks
 		# (allow to escape first backtick: r'(?<!\\)(?:\\\\)*`(.*?(?<!\\)(?:\\\\)*)`')
-		for regex in r'^```[^\n]*\n(.*?)(?<=\n)```', r'(?<!\w)`(.*?(?<!\\)(?:\\\\)*)`(?!\w)':
+		for regex in r'^```[^\n]*\n(.*?)(?<=\n)```', r'(?<!\w)`([^\n]*?(?<!\\)(?:\\\\)*)`(?!\w)':
 			for match in re.finditer(regex, text, re.S|re.M):
 				yield match.start(1), match.end(1), []
 	if markupname == 'headline':
