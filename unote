@@ -348,7 +348,7 @@ class CompletionSuggestionsBox(gtk.TextView):
 		bgcolor = gtk.gdk.Color('lightgrey')
 		self.modify_base(gtk.STATE_NORMAL, bgcolor)
 	def filter_for(self, word):
-		last_suggestion = self.get_current_suggestion()
+		last_suggestion = self.current_suggestion
 		self._filterer_word = word
 		self._shown_items = filter(lambda item: self._filter_func(word, item), self._all_items)
 		idx = -1
@@ -357,33 +357,43 @@ class CompletionSuggestionsBox(gtk.TextView):
 			except ValueError: pass
 		self.set_suggestion_index(idx)
 	@staticmethod
-	def _filter_func(query, option):
-		if query == option: return False
+	def _filter_func(query, item):
+		if query == item['word']: return False
 		query_norm = re.sub(r'[^\w-]', '', query, flags=re.I|re.U)
-		return option.find(query_norm) > -1
+		return item['word'].find(query_norm) > -1
 	def next_suggestion(self):
 		idx = self._suggestion_index + 1
 		if idx >= len(self._shown_items): idx = 0
 		self.set_suggestion_index(idx)
-		return self.get_current_suggestion()
+		return self.current_suggestion_word
 	def previous_suggestion(self):
 		idx = self._suggestion_index - 1
 		if idx < 0: idx = len(self._shown_items)-1
 		self.set_suggestion_index(idx)
-		return self.get_current_suggestion()
-	def get_current_suggestion(self):
+		return self.current_suggestion_word
+	@property
+	def current_suggestion(self):
 		if len(self._shown_items) == 0: return None
 		return self._shown_items[self._suggestion_index]
+	@property
+	def current_suggestion_word(self):
+		return (self.current_suggestion or {'word': None})['word']
 	def set_suggestion_index(self, idx=-1):
 		textbuffer = self.get_buffer()
 		textbuffer.set_text('')
 		for i, item in enumerate(self._shown_items):
 			tagname = 'active_suggestion' if i == idx else 'inactive_suggestion'
-			textbuffer.insert_with_tags_by_name(textbuffer.get_end_iter(), item, tagname)
+			textbuffer.insert_with_tags_by_name(textbuffer.get_end_iter(), item['label'], tagname)
 			textbuffer.insert(textbuffer.get_end_iter(), ' ')
 		self._suggestion_index = idx
 	def set_items(self, items):
+		for item in items:
+			assert isinstance(item, dict)
+			assert item.has_key('word')
 		self._all_items = items[:]
+		for item in self._all_items:
+			if not item.has_key('label') or item['label'] is None:
+				item['label'] = item['word']
 		self.filter_for(self._filterer_word)
 
 class TreeStore(gtk.TreeStore):
@@ -783,12 +793,16 @@ def on_tasklist_changed(*X):
 
 def process_tasklist():
 	AllTags.clear()
-	def process_tasklist_taskitem(model, path, treeiter):
+	def process_tasklist_taskitem(model, path, treeiter, data):
 		task_text = model[path]['raw_text']
 		for tag in get_tags(task_text):
-			AllTags[tag] = AllTags.get(tag, 0) + 1
-	tasklist.foreach(process_tasklist_taskitem)
-	completion_suggestions_box.set_items(AllTags.keys())
+			data[tag] = data.get(tag, 0) + 1
+	tasklist.foreach(process_tasklist_taskitem, AllTags)
+	completion_items = sorted(
+		[{'label': '%s (%d)'%(key, AllTags[key]), 'word': key, 'count': AllTags[key]} for key in AllTags.keys()],
+		cmp=lambda a, b: cmp(b['count'], a['count'])
+	)
+	completion_suggestions_box.set_items(completion_items)
 
 def save_position():
 	filepath = taskbody_view.get_data('loaded-task-file')
@@ -1208,7 +1222,7 @@ def handle_tab_completion(event, callback):
 		completion_suggestions_box.previous_suggestion()
 		return True
 	elif keys.control and keys.enter:
-		suggestion = completion_suggestions_box.get_current_suggestion()
+		suggestion = completion_suggestions_box.current_suggestion_word
 		if suggestion is not None:
 			callback(suggestion)
 			completion_suggestions_box.hide()
