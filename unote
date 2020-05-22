@@ -419,6 +419,7 @@ class TreeStore(gtk.TreeStore):
 		if s is None: return None
 		return unicode(s)
 	def get_column_num(self, col_name):
+		if isinstance(col_name, int): return col_name
 		return self.column[col_name]
 	def get(self, row, *columns):
 		if type(row) == tuple:
@@ -427,8 +428,7 @@ class TreeStore(gtk.TreeStore):
 			return tuple()
 		columns = list(columns)
 		for i, col in enumerate(columns):
-			if isinstance(col, basestring):
-				columns[i] = self.get_column_num(col)
+			columns[i] = self.get_column_num(col)
 		answer = super(self.__class__, self).get(row, *columns)
 		answer = list(answer)
 		for i, col in enumerate(columns):
@@ -476,10 +476,29 @@ class TreeStore(gtk.TreeStore):
 	def iterate_columns(self, *columns):
 		row = self.get_iter_root()
 		while row is not None:
-			answer = [row.copy()]
+			answer = [row]
 			answer.extend(self.get(row, *columns))
 			yield answer
 			row = successor_iter(self, row)
+	def rowpath_by_filtered_row(self, filtered_model, filtered_row, key_column):
+		"""This method takes a TreeModel originated by the filter_new() method of this TreeModel instance,
+		and a row of the filtering TreeModel (either path or iter) and column (name or number),
+		and returns the path of row in this TreeModel instance which matches to the asked row 
+		based on the same data in their key columns.
+		It basically makes reference between the filtered and the unfiltered TreeModel."""
+		key_column = self.get_column_num(key_column)
+		key = filtered_model[filtered_row][key_column]
+		def findrow(model, treepath, treeiter, data):
+			if model[treeiter][key_column] == key:
+				data['found'] = treepath
+				return True
+			return False
+		data = {'found': None, 'key_column': key_column, 'key': key}
+		self.foreach(findrow, data)
+		if data['found'] is None:
+			raise KeyError()  # can not imagine how could it happen
+		else:
+			return data['found']
 
 class TreeView(gtk.TreeView):
 	__gsignals__ = {
@@ -754,8 +773,8 @@ def on_tasklist_changed(*X):
 
 def process_tasklist():
 	AllTags.clear()
-	def process_tasklist_taskitem(Xmodel, path, treeiter):
-		task_text = tasklist[path]['raw_text']
+	def process_tasklist_taskitem(model, path, treeiter):
+		task_text = model[path]['raw_text']
 		for tag in get_tags(task_text):
 			AllTags[tag] = AllTags.get(tag, 0) + 1
 	tasklist.foreach(process_tasklist_taskitem)
@@ -854,14 +873,15 @@ def on_tasklist_selection_change(selection):
 	if len(iterpaths) == 0:
 		return
 	iterpath = iterpaths[0]
+	treeiter = tasklist.get_iter(tasklist.rowpath_by_filtered_row(tasklist_filtered, iterpath, key_column='file'))
 	loaded_task_file = taskbody_view.get_data('loaded-task-file')
-	if loaded_task_file is not None and loaded_task_file == tasklist[iterpath]['file']:
+	if loaded_task_file is not None and loaded_task_file == tasklist[treeiter]['file']:
 		return
-	treeiter = tasklist.get_iter(iterpath)
 	task_text = tasklist[treeiter]['raw_text']
 	load_taskbody(task_text)
-	taskbody_view.set_data('loaded-task-file', tasklist[treeiter]['file'])
-	Props['history/last/opened-task/path'] = tasklist[treeiter]['file']
+	task_file = tasklist[treeiter]['file']
+	taskbody_view.set_data('loaded-task-file', task_file)
+	Props['history/last/opened-task/path'] = task_file
 	# restore cursor position:
 	try:
 		cursor_pos = xattr.getxattr(tasklist[treeiter]['file'], 'user.textedit.cursor_position')
@@ -994,8 +1014,9 @@ def on_tasklist_menu(treeview, popup_menu, treepath, tv_col, cell_x, cell_y):
 		popup_menu.append(ActionStockMenuItem(label=_("Done"), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done(treepath)))
 		popup_menu.append(ActionStockMenuItem(label=_("Delete…"), stock_id=gtk.STOCK_DELETE, action=lambda *X: act_task_delete(treepath)))
 
-def act_task_done(treepath):
-	filepath = tasklist[treepath]['file']
+def act_task_done(treefilter_treepath):
+	rowpath = tasklist.rowpath_by_filtered_row(tasklist_filtered, treefilter_treepath, key_column='file')
+	filepath = tasklist[rowpath]['file']
 	subpath = filepath[len(NOTES_DIR)+1:]
 	subdir, subfile = os.path.split(subpath)
 	newpath = find_nonexistent_file(os.path.join(NOTES_ARCHIVE_DIR, subdir), subfile)
@@ -1003,8 +1024,9 @@ def act_task_done(treepath):
 	act_new_task()
 	os.rename(filepath, newpath)
 
-def act_task_delete(treepath):
-	filepath = tasklist[treepath]['file']
+def act_task_delete(treefilter_treepath):
+	rowpath = tasklist.rowpath_by_filtered_row(tasklist_filtered, treefilter_treepath, key_column='file')
+	filepath = tasklist[rowpath]['file']
 	if question(_("Really delete?")+'\n<tt>'+glib.markup_escape_text(filepath)+'</tt>', stock_yes=(None, gtk.STOCK_DELETE), stock_no=(None, gtk.STOCK_CANCEL), parent=main_win):
 		act_new_task()
 		os.remove(filepath)
@@ -1078,7 +1100,7 @@ def on_taskbody_changed(*X):
 		if not m: return
 		first_line = m.group(1)
 		filepath = find_nonexistent_file(NOTES_DIR, filenameize(first_line) + '.txt')
-		open(filepath, 'a').write(text)
+		open(filepath, 'w').write(text)
 		taskbody_view.set_data('loaded-task-file', filepath)
 	else:
 		treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
