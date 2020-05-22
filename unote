@@ -469,17 +469,20 @@ class TreeStore(gtk.TreeStore):
 				itempairs.extend([self.get_column_num(col_name), value])
 		super(self.__class__, self).set(treeiter, *itempairs)
 	def get_cells_by_column(self, col_name):
-		row = self.get_iter_root()
-		while row is not None:
-			yield self[row][col_name]
-			row = successor_iter(self, row)
-	def iterate_columns(self, *columns):
-		row = self.get_iter_root()
-		while row is not None:
+		treeiter = self.get_iter_root()
+		while treeiter is not None:
+			yield self[treeiter][col_name]
+			treeiter = successor_iter(self, treeiter)
+	def walk_columns(self, *columns):
+		"""yields a sequence of [TreeModelRow, value-1, value-2, ..., value-n] lists
+		for value-1 to value-n being the content of cells in the requested columns in each row"""
+		treeiter = self.get_iter_root()
+		while treeiter is not None:
+			row = self[treeiter]
 			answer = [row]
-			answer.extend(self.get(row, *columns))
+			answer.extend(self.get(treeiter, *columns))
 			yield answer
-			row = successor_iter(self, row)
+			treeiter = successor_iter(self, row.iter)
 	def rowpath_by_filtered_row(self, filtered_model, filtered_row, key_column):
 		"""This method takes a TreeModel originated by the filter_new() method of this TreeModel instance,
 		and a row of the filtering TreeModel (either path or iter) and column (name or number),
@@ -673,9 +676,9 @@ def program_start(widget, event):
 	main_win.connect('configure-event', on_window_configure)
 	load_tasklist()
 	# load last opened task
-	for treeiter, task_file in tasklist.iterate_columns('file'):
+	for row, task_file in tasklist.walk_columns('file'):
 		if task_file == Props['history/last/opened-task/path']:
-			tasklist_selection.select_path(tasklist.get_path(treeiter))
+			tasklist_selection.select_path(row.path)
 
 class PropertyTree(dict):
 	def __init__(self, *args):
@@ -735,8 +738,7 @@ def load_tasks():
 			mtime = os.stat(filepath).st_mtime
 			with open(filepath, 'r') as f:
 				text = f.read()
-				text = unicode(text)
-				yield text, filepath, mtime
+				yield unicode(text), unicode(filepath), mtime
 
 def get_tags(text):
 	return re.findall(r'(?:^|\s|,)(#[\w-]+)', text, re.I|re.U)
@@ -763,10 +765,18 @@ def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, tas
 	treestore.set(treeiter, row)
 
 def load_tasklist():
-	tasklist.clear()
+	rows_to_forget = dict(map(lambda x: (x[1], x[0]), tasklist.walk_columns('file')))
 	for task_text, task_file, task_mtime in load_tasks():
-		treeiter = tasklist.append(None, {})
+		if rows_to_forget.has_key(task_file):
+			treeiter = rows_to_forget[task_file].iter
+			del rows_to_forget[task_file]
+		else:
+			treeiter = tasklist.append(None, {})
 		update_task_in_list(tasklist, treeiter, task_text, task_file, task_mtime)
+	for task_file, row in rows_to_forget.iteritems():
+		if taskbody_view.get_data('loaded-task-file') == task_file:
+			act_new_task()
+		tasklist.remove(row.iter)
 
 def on_tasklist_changed(*X):
 	timer_once(0.2, process_tasklist)
@@ -782,7 +792,7 @@ def process_tasklist():
 
 def save_position():
 	filepath = taskbody_view.get_data('loaded-task-file')
-	if filepath is not None:
+	if filepath is not None and os.path.exists(filepath):
 		pos = taskbody_buffer.cursor_pos
 		try:
 			xattr.setxattr(filepath, 'user.textedit.cursor_position', str(pos))
@@ -1080,9 +1090,9 @@ def on_window_configure(widget, event):
 
 def get_tasklist_treeiter_by_file(q_file):
 	treeiter = None
-	for c_iter, c_file in tasklist.iterate_columns('file'):
+	for c_row, c_file in tasklist.walk_columns('file'):
 		if c_file == q_file:
-			return c_iter
+			return c_row.iter
 	raise KeyError(_("No row with file=='%s'") % q_file)
 
 def save_task():
