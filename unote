@@ -493,12 +493,13 @@ class TreeStore(gtk.TreeStore):
 			answer.extend(self.get(treeiter, *columns))
 			yield answer
 			treeiter = successor_iter(self, row.iter)
-	def rowpath_by_filtered_row(self, filtered_model, filtered_row, key_column):
-		"""This method takes a TreeModel originated by the filter_new() method of this TreeModel instance,
-		and a row of the filtering TreeModel (either path or iter) and column (name or number),
-		and returns the path of row in this TreeModel instance which matches to the asked row 
-		based on the same data in their key columns.
-		It basically makes reference between the filtered and the unfiltered TreeModel."""
+	def rowpath_by_derivative_row(self, filtered_model, filtered_row, key_column):
+		"""This method takes a derivative TreeModel (usually derivated by the filter_new() method of this 
+		TreeModel instance, but it can be derivated at higer order too) and a row of the derivated 
+		TreeModel (either path or iter) and a column (name or number).
+		Returns the path of row in this TreeModel instance which matches to the asked row  based on the 
+		same data in their key columns.
+		It basically makes reference between the derivated and the original TreeModel."""
 		key_column = self.get_column_num(key_column)
 		key = filtered_model[filtered_row][key_column]
 		def findrow(model, treepath, treeiter, data):
@@ -903,22 +904,24 @@ def parse_taskbody(text):
 		calendar.hide()
 
 def on_tasklist_selection_change(selection):
-	Xmodel, iterpaths = selection.get_selected_rows()
+	model, iterpaths = selection.get_selected_rows()
 	if len(iterpaths) == 0:
 		return
 	iterpath = iterpaths[0]
-	treeiter = tasklist.get_iter(tasklist.rowpath_by_filtered_row(tasklist_filtered, iterpath, key_column='file'))
+	# TODO: support multiple loaded task
+	treeiter = tasklist.get_iter(tasklist.rowpath_by_derivative_row(model, iterpath, key_column='file'))
+	row = tasklist[treeiter]
 	loaded_task_file = taskbody_view.get_data('loaded-task-file')
-	if loaded_task_file is not None and loaded_task_file == tasklist[treeiter]['file']:
+	if loaded_task_file is not None and loaded_task_file == row['file']:
 		return
-	task_text = tasklist[treeiter]['raw_text']
+	task_text = row['raw_text']
+	task_file = row['file']
 	load_taskbody(task_text)
-	task_file = tasklist[treeiter]['file']
 	taskbody_view.set_data('loaded-task-file', task_file)
 	Props['history/last/opened-task/path'] = task_file[len(NOTES_DIR)+1:]
 	# restore cursor position:
 	try:
-		cursor_pos = xattr.getxattr(tasklist[treeiter]['file'], 'user.textedit.cursor_position')
+		cursor_pos = xattr.getxattr(task_file, 'user.textedit.cursor_position')
 	except IOError as e:
 		if e.errno == errno.ENODATA: pass
 		else: raise
@@ -1037,23 +1040,25 @@ def on_savedsearches_changed(*X):
 
 def on_savedsearches_menu(treeview, popup_menu, treepath, tv_col, cell_x, cell_y):
 	if treepath is not None:
-		savedquery = savedsearches[treepath]['query']
-		popup_menu.append(ActionStockMenuItem(label=_("Remove '%s'")%savedquery, stock_id=gtk.STOCK_REMOVE, action=lambda *X: savedsearches.remove(savedsearches.get_iter(treepath))))
+		model = treeview.get_model()
+		row = model[treepath]
+		savedquery = row['query']
+		popup_menu.append(ActionStockMenuItem(label=_("Remove '%s'")%savedquery, stock_id=gtk.STOCK_REMOVE, action=lambda *X: model.remove(row.iter)))
 
 def on_savedsearches_selection(selection):
-	Xmodel, iterpaths = selection.get_selected_rows()
+	model, iterpaths = selection.get_selected_rows()
 	if len(iterpaths) > 0:
-		new_query = ' '.join([savedsearches[iterpath]['query'] for iterpath in iterpaths])
+		new_query = ' '.join([model[iterpath]['query'] for iterpath in iterpaths])
 		searchbox.set_text(new_query)
 
 def on_tasklist_menu(treeview, popup_menu, treepath, tv_col, cell_x, cell_y):
 	if treepath is not None:
-		clicked_rowpath = tasklist.rowpath_by_filtered_row(tasklist_filtered, treepath, key_column='file')
+		clicked_rowpath = tasklist.rowpath_by_derivative_row(treeview.get_model(), treepath, key_column='file')
 		clicked_filepath = tasklist[clicked_rowpath]['file']
-		Xmodel, s_treepaths = tasklist_selection.get_selected_rows()
+		model, s_treepaths = tasklist_selection.get_selected_rows()
 		selected_filepaths = []
 		for s_treepath in s_treepaths:
-			selected_rowpath = tasklist.rowpath_by_filtered_row(tasklist_filtered, s_treepath, key_column='file')
+			selected_rowpath = tasklist.rowpath_by_derivative_row(model, s_treepath, key_column='file')
 			selected_filepaths.append(tasklist[selected_rowpath]['file'])
 		popup_menu.append(ActionStockMenuItem(label=_("Done this"), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done([clicked_filepath])))
 		popup_menu.append(ActionStockMenuItem(label=_("Done selected (%d)")%len(selected_filepaths), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done(selected_filepaths)))
