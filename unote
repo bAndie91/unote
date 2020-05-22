@@ -653,21 +653,30 @@ class ActionStockMenuItem(gtk.ImageMenuItem):
 			self.connect('activate', action)
 
 def add_treeview_columns(treeview, columns):
-	for col_title, col_attr, col_num in columns:
+	for col_name, col_title, col_attr, col_num in columns:
 		tvc = gtk.TreeViewColumn()
+		tvc.set_data('name', col_name)
 		tvc.set_title(col_title)
+		tvc.set_sort_indicator(True)
+		tvc.set_sort_column_id(col_num)
+		tvc.set_resizable(True)
+		tvc.set_sizing(gtk.TREE_VIEW_COLUMN_FIXED)
+		
 		cr_txt = gtk.CellRendererText()
 		tvc.pack_start(cr_txt, True)
 		tvc.add_attribute(cr_txt, col_attr, col_num)
+		
 		treeview.append_column(tvc)
-		tvc.set_resizable(True)
-		tvc.set_sizing(gtk.TREE_VIEW_COLUMN_FIXED)
 		width = Props['layout/column/%s/width'%col_title]
 		if width is not None:
 			tvc.set_fixed_width(int(width))
 		else:
 			tvc.set_fixed_width(100)
 		tvc.connect('notify::width', lambda widget, prop: Props.__setitem__('layout/column/%s/width'%widget.get_title(), widget.get_width()))
+		tvc.connect('clicked', lambda tvc: (
+			Props.__setitem__('field/tasklist/sort-by', tvc.get_data('name')),
+			Props.__setitem__('field/tasklist/sort-order', int(tvc.get_sort_order())),
+		))
 
 def main_quit():
 	save_position()
@@ -687,7 +696,8 @@ def program_start(widget, event):
 	load_tasklist()
 	# load last opened task
 	for row, task_file in tasklist.walk_columns('file'):
-		if task_file == Props['history/last/opened-task/path']:
+		task_file_nonprefixed = task_file[len(NOTES_DIR)+1:]
+		if task_file_nonprefixed == Props['history/last/opened-task/path']:
 			tasklist_selection.select_path(row.path)
 
 class PropertyTree(dict):
@@ -905,7 +915,7 @@ def on_tasklist_selection_change(selection):
 	load_taskbody(task_text)
 	task_file = tasklist[treeiter]['file']
 	taskbody_view.set_data('loaded-task-file', task_file)
-	Props['history/last/opened-task/path'] = task_file
+	Props['history/last/opened-task/path'] = task_file[len(NOTES_DIR)+1:]
 	# restore cursor position:
 	try:
 		cursor_pos = xattr.getxattr(tasklist[treeiter]['file'], 'user.textedit.cursor_position')
@@ -1009,6 +1019,9 @@ def on_searchbox_keypress(widget, event):
 def on_searchbox_keypressed(widget, event):
 	c_word = current_word(searchbox.get_text(), searchbox.get_property('cursor-position'), word_re=taskbody_word_re)
 	if c_word.startswith('#'):
+		# TODO: set only items which intersects the current search term
+		#completion_suggestions_box.set_items()
+		# TODO: set to all tags again when focus is at taskbody view
 		completion_suggestions_box.show()
 		completion_suggestions_box.filter_for(c_word)
 	else:
@@ -1359,7 +1372,7 @@ for query in filter(lambda query: query != '', map(lambda query: query.strip(), 
 	savedsearches.append(None, {'query': query})
 savedsearches.connect('changed', on_savedsearches_changed)
 savedsearches_view = TreeView(savedsearches)
-add_treeview_columns(savedsearches_view, [(_("Search"), 'text', savedsearches.get_column_num('query'))])
+add_treeview_columns(savedsearches_view, [('query', _("Search"), 'text', savedsearches.get_column_num('query'))])
 savedsearches_view.set_reorderable(True)
 savedsearches_view.set_headers_clickable(True)
 savedsearches_view.connect('menu-popup', on_savedsearches_menu)
@@ -1381,17 +1394,20 @@ inotifyx.add_watch(directory_watcher, NOTES_DIR, inotifyx.IN_MODIFY | inotifyx.I
 glib.io_add_watch(directory_watcher, glib.IO_IN|glib.IO_OUT, on_notes_dir_changed)
 
 tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('updated', str), ('due', str))
-tasklist_filtered = tasklist.filter_new()
-tasklist_filtered.set_visible_func(tasklist_filterer)
 tasklist.connect('row-changed', on_tasklist_changed)
 tasklist.connect('row-deleted', on_tasklist_changed)
 tasklist.connect('row-inserted', on_tasklist_changed)
 
-tasklist_view = TreeView(tasklist_filtered)
+tasklist_filtered = tasklist.filter_new()
+tasklist_filtered.set_visible_func(tasklist_filterer)
+tasklist_sorted = gtk.TreeModelSort(tasklist_filtered)
+tasklist_sorted.set_sort_column_id(tasklist.get_column_num(Props.get('field/tasklist/sort-by', 'due')), int(Props.get('field/tasklist/sort-order', gtk.SORT_ASCENDING)))
+
+tasklist_view = TreeView(tasklist_sorted)
 add_treeview_columns(tasklist_view, [
-	(_("Task"), 'markup', tasklist.get_column_num('headline_markup')),
-	(_("Updated"), 'text', tasklist.get_column_num('updated')),
-	(_("Due"), 'text', tasklist.get_column_num('due')),
+	('headline_markup', _("Task"), 'markup', tasklist.get_column_num('headline_markup')),
+	('updated', _("Updated"), 'text', tasklist.get_column_num('updated')),
+	('due', _("Due"), 'text', tasklist.get_column_num('due')),
 ])
 tasklist_view.set_reorderable(True)
 tasklist_view.set_headers_clickable(True)
