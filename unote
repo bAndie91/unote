@@ -806,6 +806,10 @@ def load_tasklist():
 def on_tasklist_changed(*X):
 	timer_once(0.2, process_tasklist)
 
+def make_tag_suggestion_list(tags):
+	return sorted([{'label': '%s (%d)'%(key, tags[key]), 'word': key, 'count': tags[key]} for key in tags.keys()],
+		cmp=lambda a, b: cmp(b['count'], a['count']))
+
 def process_tasklist():
 	AllTags.clear()
 	def process_tasklist_taskitem(model, path, treeiter, data):
@@ -813,10 +817,7 @@ def process_tasklist():
 		for tag in get_tags(task_text):
 			data[tag] = data.get(tag, 0) + 1
 	tasklist.foreach(process_tasklist_taskitem, AllTags)
-	completion_items = sorted(
-		[{'label': '%s (%d)'%(key, AllTags[key]), 'word': key, 'count': AllTags[key]} for key in AllTags.keys()],
-		cmp=lambda a, b: cmp(b['count'], a['count'])
-	)
+	completion_items = make_tag_suggestion_list(AllTags)
 	completion_suggestions_box.set_items(completion_items)
 
 def save_position():
@@ -1044,7 +1045,6 @@ def compute_searchbox_suggestions():
 		completion_items = filter(lambda item: item['count']>0, completion_items)
 		map(lambda item: item.update({'label': '%s (%d)'%(item['word'], item['count'])}), completion_items)
 		completion_suggestions_box.set_items(completion_items)
-		# TODO: set to all tags again when focus is at taskbody view
 		completion_suggestions_box.show()
 		completion_suggestions_box.filter_for(c_word)
 	else:
@@ -1331,6 +1331,10 @@ def on_taskbody_view_cursor_moved(Xtextview, Xstep_size, Xcount, Xextend_selecti
 	first_half, second_half = taskbody_buffer.get_word_halves(taskbody_buffer.cursor_iter, word_re=taskbody_word_re)
 	act_taskbody_word(first_half + second_half, len(first_half))
 
+def on_taskbody_view_focus(*X):
+	completion_items = make_tag_suggestion_list(AllTags)
+	completion_suggestions_box.set_items(completion_items)
+
 def taskbody_insert_line(s):
 	pre, post = taskbody_buffer.get_buffer_halves()
 	if pre[-1] != '\n': s = '\n' + s
@@ -1456,6 +1460,7 @@ taskbody_view.set_wrap_mode(getattr(gtk, Props['field/taskbody/wrapmode'] or 'WR
 taskbody_view.connect('populate-popup', on_taskbody_view_menu)
 taskbody_view.connect('key-press-event', on_taskbody_view_keypress)
 taskbody_view.connect_after('move-cursor', on_taskbody_view_cursor_moved)
+taskbody_view.connect('focus-in-event', on_taskbody_view_focus)
 
 completion_suggestions_box = CompletionSuggestionsBox()
 
