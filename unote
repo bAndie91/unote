@@ -724,7 +724,7 @@ def on_notes_dir_changed(fd, Xcondition):
 
 def load_tasks():
 	for dirpath, dirnames, filenames in os.walk(os.path.expanduser(NOTES_DIR), topdown=True, onerror=None, followlinks=True):
-		for idx, dirname in enumerate(dirnames):
+		for idx, dirname in reversed(list(enumerate(dirnames))):
 			if dirname.startswith('.'):
 				# don't descent into hidden directories
 				del dirnames[idx]
