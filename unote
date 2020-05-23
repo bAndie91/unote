@@ -488,8 +488,9 @@ class TreeStore(gtk.TreeStore):
 			yield self[treeiter][col_name]
 			treeiter = successor_iter(self, treeiter)
 	def walk_columns(self, *columns):
-		"""yields a sequence of [TreeModelRow, value-1, value-2, ..., value-n] lists
-		for value-1 to value-n being the content of cells in the requested columns in each row"""
+		"""yields a sequence of [TreeModelRow, depth, value-1, value-2, ..., value-n] lists
+		for depth being the row's level on the tree and value-1 to value-n being the 
+		content of cells in the requested columns in each row"""
 		treeiter = self.get_iter_root()
 		while treeiter is not None:
 			row = self[treeiter]
@@ -1056,7 +1057,29 @@ def save_search_query(query):
 		savedsearches.append(None, [query])
 
 def on_savedsearches_changed(*X):
-	Props['field/quicksearch/list'] = '\n'.join(filter(lambda x: x is not None, savedsearches.get_cells_by_column('query')))
+	timer_once(1.0, act_save_quicksearch_list)
+
+def act_save_quicksearch_list():
+	text = ''
+	for row, query in savedsearches.walk_columns('query'):
+		if query is None: continue
+		expandstate = '+' if savedsearches_view.row_expanded(row.path) else '-'
+		text += '\t'*(len(row.path)-1) + expandstate + query + '\n'
+	Props['field/quicksearch/list'] = text
+
+def load_saved_searches(savedsearches_text):
+	prev_level = 0
+	prev_iter_on_level = {-1: None}
+	to_expand = []
+	for tabs, expandstate, query in map(lambda s: re.findall(r'(\t*)([+-]?)(.*)', s)[0], savedsearches_text.split('\n')):
+		if query == '': continue
+		level = len(tabs)
+		parent_iter = prev_iter_on_level[level - 1]
+		prev_iter_on_level[level] = savedsearches.append(parent_iter, {'query': query})
+		if expandstate == '+':
+			to_expand.append(savedsearches.get_path(prev_iter_on_level[level]))
+	for treepath in to_expand:
+		savedsearches_view.expand_row(treepath, open_all=False)
 
 def on_savedsearches_menu(treeview, popup_menu, treepath, tv_col, cell_x, cell_y):
 	if treepath is not None:
@@ -1400,14 +1423,15 @@ paned2h.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: P
 paned2v.connect('notify::position', lambda paned, pos: timer_once(1.5, lambda: Props.__setitem__('layout/panel/tasklist/height', paned.get_position())))
 
 savedsearches = TreeStore(('query', unicode))
-for query in filter(lambda query: query != '', map(lambda query: query.strip(), (Props['field/quicksearch/list'] or '').split('\n'))):
-	savedsearches.append(None, {'query': query})
 savedsearches.connect('changed', on_savedsearches_changed)
 savedsearches_view = TreeView(savedsearches)
 add_treeview_columns(savedsearches_view, [('query', _("Search"), 'text', savedsearches.get_column_num('query'))])
 savedsearches_view.set_reorderable(True)
 savedsearches_view.set_headers_clickable(True)
 savedsearches_view.connect('menu-popup', on_savedsearches_menu)
+savedsearches_view.connect('row-collapsed', on_savedsearches_changed)
+savedsearches_view.connect('row-expanded', on_savedsearches_changed)
+load_saved_searches(Props['field/quicksearch/list'] or '')
 
 savedsearches_selection = savedsearches_view.get_selection()
 savedsearches_selection.set_mode(gtk.SELECTION_MULTIPLE)
