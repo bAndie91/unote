@@ -974,9 +974,11 @@ def on_tasklist_selection_change(selection):
 	loaded_task_file = taskbody_view.get_data('loaded-task-file')
 	if loaded_task_file is not None and loaded_task_file == s_task_file:
 		return
+	act_new_task()
 	task_text = row['raw_text']
 	load_taskbody(task_text)
 	taskbody_view.set_data('loaded-task-file', s_task_file)
+	taskbody_view.set_data('unsaved', False)
 	Props['history/last/opened-task/path'] = s_task_file[len(NOTES_DIR)+1:]
 	# restore cursor position:
 	try:
@@ -1238,6 +1240,7 @@ def save_task():
 			f.write(text)
 
 def on_taskbody_changed(*X):
+	taskbody_view.set_data('unsaved', True)
 	text = taskbody_buffer.get_text_all()
 	# re-parse
 	parse_taskbody(text)
@@ -1449,9 +1452,15 @@ def taskbody_remove_text_around_cursor(s):
 
 def act_new_task():
 	save_position()
+	if taskbody_view.get_data('unsaved'):
+		# save the currentlly loaded task now, and leave scheduled save_task() there, 
+		# it'll not save the task which it was called upon, but an other one - it's not a problem 
+		# since we have auto-saving anyway.
+		save_task()
 	tasklist_selection.unselect_all()
 	taskbody_view.set_data('loaded-task-file', None)
-	taskbody_buffer.reinit("")
+	taskbody_view.set_data('unsaved', False)
+	taskbody_buffer.reinit('')
 	taskbody_view.grab_focus()
 
 
