@@ -416,7 +416,7 @@ class TreeModelRow(object):
 		return self.real_treemodelrow.model
 	def __getitem__(self, item):
 		item = self.upstream_treemodel.get_column_num(item)
-		answer = self.model.get(self.iter, item)[0]
+		answer = gtk.TreeModel.get(self.model, self.iter, item)[0]
 		return self.upstream_treemodel.convert_cell(item, answer)
 	def __setitem__(self, item, value):
 		item = self.upstream_treemodel.get_column_num(item)
@@ -433,7 +433,7 @@ class TreeModelProxy(object):
 		return func(derived_model, treepath, treeiter, userdata)
 
 class TreeModelFilter(gtk.TreeModelFilter):
-	_proxy_implemented = ['__getitem__', 'foreach', 'get']
+	_proxy_implemented = ['__getitem__', 'foreach', 'get', 'get_value']
 	def __init__(self, upstream_treemodel, treemodel_filter):
 		self._proxy_real_treemodel = treemodel_filter
 		self._proxy_upstream_treemodel = upstream_treemodel
@@ -444,9 +444,9 @@ class TreeModelFilter(gtk.TreeModelFilter):
 		_proxy_userdata = {'func': func, 'userdata': userdata, 'derived_model': self}
 		self._proxy_real_treemodel.foreach(TreeModelProxy._proxy_foreach, _proxy_userdata)
 	def get(self, row, *columns):
-		raise('unimplemented')
+		raise(Exception('unimplemented'))
 	def get_value(self, treeiter, column):
-		raise('unimplemented')
+		raise(Exception('unimplemented'))
 	def __getattribute__(self, attr):
 		if attr.startswith('_proxy_') or attr in self._proxy_implemented:
 			return object.__getattribute__(self, attr)
@@ -467,11 +467,11 @@ class TreeModelSort(gtk.TreeModelSort):
 		return TreeModelRow(answer, self._proxy_upstream_treemodel)
 	def foreach(self, func, userdata):
 		_proxy_userdata = {'func': func, 'userdata': userdata, 'derived_model': self}
-		self._proxy_real_treemodel.foreach(TreeModelProxy._proxy_foreach, _proxy_userdata)
+		super(self.__class__, self).foreach(TreeModelProxy._proxy_foreach, _proxy_userdata)
 	def get(self, row, *columns):
-		raise('unimplemented')
+		raise(Exception('unimplemented'))
 	def get_value(self, treeiter, column):
-		raise('unimplemented')
+		raise(Exception('unimplemented'))
 
 class TreeStore(gtk.TreeStore):
 	__gsignals__ = {
@@ -523,7 +523,7 @@ class TreeStore(gtk.TreeStore):
 		answer = tuple(answer)
 		return answer
 	def get_value(self, treeiter, column):
-		raise('unimplemented')
+		raise(Exception('unimplemented'))
 	def convert_cell(self, col_num, cell_value):
 		if self.reader.has_key(col_num):
 			return self.reader[col_num](cell_value)
@@ -1040,23 +1040,23 @@ def on_searchbox_keypress(widget, event):
 	mod_up = keys.up and (keys.alt or keys.shift)
 	mod_down = keys.down and (keys.alt or keys.shift)
 	if mod_up or mod_down:
-		Xmodel, s_rows = tasklist_selection.get_selected_rows()
+		model, s_rows = tasklist_selection.get_selected_rows()
 		if len(s_rows) == 0:
 			c_iter = None
-			s_iter = tasklist_filtered.get_iter_root()
+			s_iter = model.get_iter_root()
 		else:
-			c_iter = tasklist_filtered.get_iter(s_rows[0 if mod_up else -1])
+			c_iter = model.get_iter(s_rows[0 if mod_up else -1])
 		if c_iter is not None:
 			if mod_down:
-				s_iter = successor_iter(tasklist_filtered, c_iter) or c_iter
+				s_iter = successor_iter(model, c_iter) or c_iter
 			elif mod_up:
-				predecessor = tasklist_filtered.get_iter_root()
+				predecessor = model.get_iter_root()
 				while predecessor is not None:
-					successor = successor_iter(tasklist_filtered, predecessor)
+					successor = successor_iter(model, predecessor)
 					if successor is None:
-						s_iter = tasklist_filtered.get_iter_root()
+						s_iter = model.get_iter_root()
 						break
-					if tasklist_filtered.get_path(successor) == tasklist_filtered.get_path(c_iter):
+					if model.get_path(successor) == model.get_path(c_iter):
 						s_iter = predecessor
 						break
 					predecessor = successor
