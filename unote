@@ -498,7 +498,10 @@ class TreeStore(gtk.TreeStore):
 			answer.extend(self.get(treeiter, *columns))
 			yield answer
 			treeiter = successor_iter(self, row.iter)
-	def rowpath_by_derivative_row(self, filtered_model, filtered_row, key_column):
+	def row_by_derivative_row(self, derivative_model, derivative_row, key_column):
+		treepath = self.rowpath_by_derivative_row(derivative_model, derivative_row, key_column)
+		return self[treepath]
+	def rowpath_by_derivative_row(self, derivative_model, derivative_row, key_column):
 		"""This method takes a derivative TreeModel (usually derivated by the filter_new() method of this 
 		TreeModel instance, but it can be derivated at higer order too) and a row of the derivated 
 		TreeModel (either path or iter) and a column (name or number).
@@ -506,7 +509,7 @@ class TreeStore(gtk.TreeStore):
 		same data in their key columns.
 		It basically makes reference between the derivated and the original TreeModel."""
 		key_column = self.get_column_num(key_column)
-		key = filtered_model[filtered_row][key_column]
+		key = derivative_model[derivative_row][key_column]
 		def findrow(model, treepath, treeiter, data):
 			if model[treeiter][key_column] == key:
 				data['found'] = treepath
@@ -701,10 +704,16 @@ def program_start(widget, event):
 	main_win.connect('configure-event', on_window_configure)
 	load_tasklist()
 	# load last opened task
-	for row, task_file in tasklist.walk_columns('file'):
+	def find_last_selected_task(model, treepath, treeiter, data):
+		task_file = tasklist.row_by_derivative_row(model, treeiter, 'file')['file']
 		task_file_nonprefixed = task_file[len(NOTES_DIR)+1:]
 		if task_file_nonprefixed == Props['history/last/opened-task/path']:
-			tasklist_selection.select_path(row.path)
+			data['rowpath'] = treepath
+			return True
+	data = {'rowpath': None}
+	tasklist_view.get_model().foreach(find_last_selected_task, data)
+	if data['rowpath'] is not None:
+		tasklist_selection.select_path(data['rowpath'])
 
 class PropertyTree(dict):
 	def __init__(self, *args):
@@ -862,7 +871,7 @@ def find_markup_positions(text, markupname):
 		for match in re.finditer(r'\b([a-z+-]+://[^\s]+)', text, re.I):
 			yield match.start(0), match.end(0), []
 	elif markupname == 'strike':
-		for match in re.finditer(ur'^\s*(?:-\s*)?(.+?)(\s+(DONE|WONTFIX|OBSOLETED)|\s*(✓|✔|✗|✘|\[(DONE|WONTFIX|OBSOLETED)\]))', text, re.U|re.M):
+		for match in re.finditer(ur'^[ \t]*(?:-[ \t]*)?(.+?)([ \t]+(DONE|WONTFIX|OBSOLETED)|[ \t]*(✓|✔|✗|✘|\[(DONE|WONTFIX|OBSOLETED)\]))', text, re.U|re.M):
 			yield match.start(1), match.end(1), []
 	elif markupname in ['bold', 'alert']:
 		coderanges = [(s, e) for s, e, h in find_coderanges(text)]
@@ -1325,9 +1334,11 @@ def on_taskbody_view_keypress(widget, event):
 	if keys.control:
 		if keys.enter:
 			pos = taskbody_buffer.cursor_pos
-			for start, end in find_markup_positions(taskbody_buffer.get_text_all(), 'link'):
+			for start, end, Xhideranges in find_markup_positions(taskbody_buffer.get_text_all(), 'link'):
 				if start <= pos < end:
 					link = taskbody_buffer.get_text_all()[start:end]
+					if link.startswith('file://'):
+						link = os.path.expanduser(link[7:])
 					run_async('xdg-open', [link])
 					return True
 		elif keys.B:
@@ -1494,6 +1505,7 @@ calendar.connect('mark-removed', lambda X, date: taskbody_remove_text_around_cur
 
 add_key_binding(main_win, '<Control>q', lambda *X: main_quit())
 add_key_binding(main_win, '<Control>f', lambda *X: searchbox.grab_focus())
+add_key_binding(main_win, '<Control>l', lambda *X: searchbox.grab_focus())
 add_key_binding(main_win, '<Control>t', lambda *X: taskbody_view.grab_focus())
 add_key_binding(main_win, '<Control>n', lambda *X: act_new_task())
 add_key_binding(main_win, '<Control><Shift>l', lambda *X: do_layout(LAYOUT[(LAYOUT.index(Props['layout/layout-set'])+1)%len(LAYOUT)]))
