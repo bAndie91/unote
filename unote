@@ -803,10 +803,13 @@ class PropertyTree(dict):
 				self.savedprops[propname] = propvalue
 
 class HistoryList(object):
-	def __init__(self, size_limit=1024000):
+	def __init__(self, size_limit=1024000, items=[], pointer=-1):
+		assert pointer < len(items)
+		if len(items) > 0 and pointer == -1: pointer = len(items)-1
+		assert (len(items) > 0 and pointer > 0) or (len(items) == 0 and pointer == -1)
 		super(self.__class__, self).__init__()
-		self.stack = []
-		self.pointer = -1
+		self.stack = items[:]
+		self.pointer = pointer
 		self.size_limit = size_limit
 		self._on_change_func = lambda:None
 	def set_size_limit(self, bytes):
@@ -1601,8 +1604,8 @@ searchbox.connect('key-press-event', on_searchbox_keypress)
 searchbox.connect('key-release-event', on_searchbox_keypressed)
 searchbox.connect('icon-release', on_searchbox_icon_clicked)
 
-taskhistorylist = HistoryList()
-taskhistorylist.on_change = lambda: Props.__setitem__('history/opened-tasks', chr(0).join(taskhistorylist[:]))
+taskhistorylist = HistoryList(items=((Props['history/opened-tasks'] or '').split(chr(0))), pointer=int(Props['history/opened-task-pointer'] or -1))
+taskhistorylist.on_change = lambda: (Props.__setitem__('history/opened-tasks', chr(0).join(taskhistorylist[:])), Props.__setitem__('history/opened-task-pointer', str(taskhistorylist.pointer)))
 
 directory_watcher = inotifyx.init()
 inotifyx.add_watch(directory_watcher, NOTES_DIR, inotifyx.IN_MODIFY | inotifyx.IN_CREATE | inotifyx.IN_DELETE | inotifyx.IN_MOVE)
