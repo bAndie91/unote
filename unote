@@ -748,16 +748,25 @@ def program_start(widget, event):
 	main_win.connect('configure-event', on_window_configure)
 	load_tasklist()
 	# load last opened task
-	def find_last_selected_task(model, treepath, treeiter, data):
-		task_file = model[treeiter]['file']
-		task_file_nonprefixed = task_file[len(NOTES_DIR)+1:]
-		if task_file_nonprefixed == Props['history/last/opened-task/path']:
-			data['file'], data['text'] = model[treepath]['file'], model[treepath]['raw_text']
+	select_or_load_task_by_file(Props['history/last/opened-task/path'])
+
+def select_or_load_task_by_file(task_file_nonprefixed):
+	def find_task_by_file(model, treepath, treeiter, data):
+		c_task_file = model[treeiter]['file']
+		c_task_file_nonprefixed = strip_path_prefix(c_task_file)
+		if c_task_file_nonprefixed == data['file_nonprefixed']:
+			data['iter'] = treeiter
+			data['text'] = model[treepath]['raw_text']
 			return True
-	data = {'file': None, 'text': None}
-	tasklist.foreach(find_last_selected_task, data)
-	if data['file'] is not None:
-		load_task(data['file'], data['text'])
+	data = {'text': None, 'iter': None, 'file_nonprefixed': task_file_nonprefixed}
+	tasklist_view.get_model().foreach(find_task_by_file, data)
+	if data['iter'] is not None:
+		tasklist_selection.unselect_all()
+		tasklist_selection.select_iter(data['iter'])
+	else:
+		tasklist.foreach(find_task_by_file, data)
+		if data['text'] is not None:
+			load_task(task_file_nonprefixed, data['text'])
 
 class PropertyTree(dict):
 	def __init__(self, *args):
@@ -835,6 +844,16 @@ class HistoryList(object):
 	def on_change(self, func):
 		self._on_change_func = func
 
+def strip_path_prefix(s):
+	if s is None: return None
+	assert s.startswith(NOTES_DIR+os.path.sep)
+	return s[len(NOTES_DIR)+1:]
+
+def add_path_prefix(s):
+	if s is None: return None
+	assert not s.startswith(NOTES_DIR+os.path.sep)
+	return os.path.join(NOTES_DIR, s)
+
 def getprops(*props):
 	values = []
 	for prop in props:
@@ -895,8 +914,9 @@ def load_tasklist():
 		else:
 			treeiter = tasklist.append(None, {})
 		update_task_in_list(tasklist, treeiter, task_text, task_file, task_mtime)
+	loaded_file_path = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
 	for task_file, row in rows_to_forget.iteritems():
-		if taskbody_view.get_data('loaded-task-file') == task_file:
+		if loaded_file_path == task_file:
 			# currently opened task is gone from the overall task list, close it
 			act_close_task()
 		tasklist.remove(row.iter)
@@ -920,7 +940,7 @@ def process_tasklist():
 	tasklist.foreach(count_tags, AllTags)
 
 def save_position():
-	filepath = taskbody_view.get_data('loaded-task-file')
+	filepath = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
 	if filepath is not None and os.path.exists(filepath):
 		pos = taskbody_buffer.cursor_pos
 		try:
@@ -1007,17 +1027,17 @@ def parse_taskbody(text):
 	else:
 		calendar.hide()
 
-def load_task(task_file, task_text):
+def load_task(task_file_nonprefixed, task_text):
 	act_close_task()
 	load_taskbody(task_text)
-	taskbody_view.set_data('loaded-task-file', task_file)
+	taskbody_view.set_data('loaded-task-file', task_file_nonprefixed)
 	taskbody_view.set_data('unsaved', False)
-	task_file_nonprefixed = task_file[len(NOTES_DIR)+1:]
 	Props['history/last/opened-task/path'] = task_file_nonprefixed
 	taskhistorylist.push(task_file_nonprefixed)
 	# restore cursor position:
+	filepath = add_path_prefix(task_file_nonprefixed)
 	try:
-		cursor_pos = xattr.getxattr(task_file, 'user.textedit.cursor_position')
+		cursor_pos = xattr.getxattr(filepath, 'user.textedit.cursor_position')
 	except IOError as e:
 		if e.errno == errno.ENODATA: pass
 		else: raise
@@ -1033,11 +1053,10 @@ def on_tasklist_selection_change(selection):
 	iterpath = iterpaths[0]
 	# TODO: support multiple loaded task
 	row = model[iterpath]
-	s_task_file = row['file']
-	loaded_task_file = taskbody_view.get_data('loaded-task-file')
-	if loaded_task_file is not None and loaded_task_file == s_task_file:
+	loaded_task_file = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
+	if loaded_task_file is not None and loaded_task_file == row['file']:
 		return
-	load_task(s_task_file, row['raw_text'])
+	load_task(strip_path_prefix(row['file']), row['raw_text'])
 
 def timer_once(sec, func, func_args=(), reschedule=True):
 	iden = func.__name__
@@ -1111,6 +1130,14 @@ def act_tasklist_select_updown(up=True):
 	if s_iter is not None:
 		tasklist_selection.unselect_all()
 		tasklist_selection.select_iter(s_iter)
+
+def act_tasklist_select_prevnext(prev=True):
+	if prev:
+		task_file = taskhistorylist.backward()
+	else:
+		task_file = taskhistorylist.forward()
+	if task_file is not None:
+		select_or_load_task_by_file(task_file)
 
 def on_searchbox_keypress(widget, event):
 	keys = KeyDetector(event)
@@ -1199,7 +1226,7 @@ def on_tasklist_menu(treeview, popup_menu, c_treepath, tv_col, cell_x, cell_y):
 
 def act_task_done(filepaths):
 	for filepath in filepaths:
-		subpath = filepath[len(NOTES_DIR)+1:]
+		subpath = strip_path_prefix(filepath)
 		subdir, subfile = os.path.split(subpath)
 		newpath = find_nonexistent_file(os.path.join(NOTES_ARCHIVE_DIR, subdir), subfile)
 		mkdir(os.path.dirname(newpath))
@@ -1287,7 +1314,7 @@ def save_task():
 	if loaded_task_file is not None:
 		treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
 		text = tasklist[treeiter]['raw_text']
-		with open(loaded_task_file, 'w') as f:
+		with open(add_path_prefix(loaded_task_file), 'w') as f:
 			f.write(text)
 
 def on_taskbody_changed(*X):
@@ -1305,8 +1332,9 @@ def on_taskbody_changed(*X):
 		first_line = m.group(1)
 		filepath = find_nonexistent_file(NOTES_DIR, filenameize(first_line) + '.txt')
 		open(filepath, 'w').write(text)
-		taskbody_view.set_data('loaded-task-file', filepath)
+		taskbody_view.set_data('loaded-task-file', strip_path_prefix(filepath))
 	else:
+		loaded_task_file = add_path_prefix(loaded_task_file)
 		treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
 		update_task_in_list(tasklist, treeiter, task_text=text, task_mtime=time.time())
 		# schedule save
@@ -1629,6 +1657,8 @@ add_key_binding(main_win, '<Control>l', lambda *X: searchbox.grab_focus())
 add_key_binding(main_win, '<Control>s', lambda *X: save_search_query(searchbox.get_text()))
 add_key_binding(main_win, '<Mod1>Up', lambda *X: act_tasklist_select_updown(up=True))
 add_key_binding(main_win, '<Mod1>Down', lambda *X: act_tasklist_select_updown(up=False))
+add_key_binding(main_win, '<Mod1>Left', lambda *X: act_tasklist_select_prevnext(prev=True))
+add_key_binding(main_win, '<Mod1>Right', lambda *X: act_tasklist_select_prevnext(prev=False))
 add_key_binding(main_win, '<Control>t', lambda *X: taskbody_view.grab_focus())
 add_key_binding(main_win, '<Control>n', lambda *X: act_new_task())
 add_key_binding(main_win, '<Control><Shift>l', lambda *X: do_layout(LAYOUT[(LAYOUT.index(Props['layout/layout-set'])+1)%len(LAYOUT)]))
