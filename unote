@@ -447,6 +447,8 @@ class TreeModelFilter(gtk.TreeModelFilter):
 		raise(Exception('unimplemented'))
 	def get_value(self, treeiter, column):
 		raise(Exception('unimplemented'))
+	def __len__(self):
+		return len(self._proxy_real_treemodel)
 	def __getattribute__(self, attr):
 		if attr.startswith('_proxy_') or attr in self._proxy_implemented:
 			return object.__getattribute__(self, attr)
@@ -1244,6 +1246,7 @@ def act_task_delete(filepaths):
 
 def filter_tasklist():
 	tasklist_filtered.refilter()
+	tasklist_top_label.set_text(_("Found: %d") % len(tasklist_filtered))
 	
 	VisibleTaskTags.clear()
 	tasklist_filtered.foreach(count_tags, VisibleTaskTags)
@@ -1313,11 +1316,11 @@ def get_tasklist_treeiter_by_file(q_file):
 	raise KeyError(_("No row with file=='%s'") % q_file)
 
 def save_task():
-	loaded_task_file = taskbody_view.get_data('loaded-task-file')
-	if loaded_task_file is not None:
-		treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
+	filepath = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
+	if filepath is not None:
+		treeiter = get_tasklist_treeiter_by_file(filepath)
 		text = tasklist[treeiter]['raw_text']
-		with open(add_path_prefix(loaded_task_file), 'w') as f:
+		with open(filepath, 'w') as f:
 			f.write(text)
 
 def on_taskbody_changed(*X):
@@ -1621,6 +1624,9 @@ tasklist_filtered.set_visible_func(tasklist_filterer)
 tasklist_sorted = TreeModelSort(tasklist_filtered)
 tasklist_sorted.set_sort_column_id(tasklist.get_column_num(Props.get('field/tasklist/sort-by', 'due')), int(Props.get('field/tasklist/sort-order', gtk.SORT_ASCENDING)))
 
+tasklist_top_label = gtk.Label()
+tasklist_top_label.set_alignment(1, 0)
+
 tasklist_view = TreeView(tasklist_sorted)
 add_treeview_columns(tasklist_view, [
 	('headline_markup', _("Task"), 'markup', tasklist.get_column_num('headline_markup')),
@@ -1674,6 +1680,7 @@ main_win.add(box_main)
 box_savedsearches = ScrolledWidget(savedsearches_view)
 box_tasklist = gtk.VBox()
 box_tasklist.pack_start(searchbox, expand=False)
+box_tasklist.pack_start(tasklist_top_label, expand=False)
 box_tasklist.pack_start(ScrolledWidget(tasklist_view))
 box_bottom = gtk.HBox()
 box_taskview = gtk.VBox()
