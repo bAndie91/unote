@@ -716,6 +716,7 @@ def add_treeview_columns(treeview, columns):
 		tvc.set_sort_column_id(col_num)
 		tvc.set_resizable(True)
 		tvc.set_sizing(gtk.TREE_VIEW_COLUMN_FIXED)
+		tvc.set_reorderable(True)
 		
 		cr_txt = gtk.CellRendererText()
 		tvc.pack_start(cr_txt, True)
@@ -880,10 +881,9 @@ def load_tasks():
 			if any([fnmatch(filename, pattern) for pattern in NOTESFILE_EXCLUDES]):
 				continue
 			filepath = os.path.join(dirpath, filename)
-			mtime = os.stat(filepath).st_mtime
 			with open(filepath, 'r') as f:
 				text = f.read()
-				yield unicode(text), unicode(filepath), mtime
+				yield unicode(text), unicode(filepath)
 
 def get_tags(text):
 	return re.findall(r'(?:^|\s|,)(#[\w-]+)', text, re.I|re.U)
@@ -891,6 +891,8 @@ def get_tags(text):
 def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, task_mtime=None):
 	row = {}
 	if task_text is not None:
+		row['raw_text'] = task_text
+		
 		preview = task_text
 		charshift = 0
 		for s, e, hideranges in find_markup_positions(preview, 'bold'):
@@ -903,22 +905,30 @@ def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, tas
 		body = re.sub(r'[\r\n]+', ' ', body)
 		body = body[0:255] + ('…' if len(body)>255 else '')
 		row['headline_markup'] = '%s <span foreground="grey">%s</span>' % (glib.markup_escape_text(head), glib.markup_escape_text(body))
-		row['raw_text'] = task_text
+		
+		dates = re.findall(r'\bdate:\s*(\S+)', task_text)
+		if dates:
+			row['date'] = dates[0]
+		duedates = re.findall(r'\bdue:\s*(\S+)', task_text)
+		if duedates:
+			row['due'] = duedates[0]
 	if task_file is not None:
 		row['file'] = task_file
+		if task_mtime is None:
+			task_mtime = os.stat(task_file).st_mtime
 	if task_mtime is not None:
 		row['updated'] = time.strftime('%F %H:%M', time.localtime(task_mtime))
 	treestore.set(treeiter, row)
 
 def load_tasklist():
 	rows_to_forget = dict(map(lambda x: (x[1], x[0]), tasklist.walk_columns('file')))
-	for task_text, task_file, task_mtime in load_tasks():
+	for task_text, task_file in load_tasks():
 		if rows_to_forget.has_key(task_file):
 			treeiter = rows_to_forget[task_file].iter
 			del rows_to_forget[task_file]
 		else:
 			treeiter = tasklist.append(None, {})
-		update_task_in_list(tasklist, treeiter, task_text, task_file, task_mtime)
+		update_task_in_list(tasklist, treeiter, task_text, task_file)
 	loaded_file_path = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
 	for task_file, row in rows_to_forget.iteritems():
 		if loaded_file_path == task_file:
@@ -1243,6 +1253,29 @@ def act_task_delete(filepaths):
 		if question(_("Really delete?")+'\n<tt>'+glib.markup_escape_text(filepath)+'</tt>', stock_yes=(None, gtk.STOCK_DELETE), stock_no=(None, gtk.STOCK_CANCEL), parent=main_win):
 			act_close_task()
 			os.remove(filepath)
+
+def make_tasklist_sortkey(cell, order):
+	"""let the alphabetical cells always first, numeric cells second,
+	and empty cells be the last part, regardless of the ascending/descending order
+	which only applies within each groups"""
+	if order == gtk.SORT_ASCENDING:
+		if cell == '' or cell is None: sortkey = 'C'
+		elif re.search(r'^\d', cell): sortkey = 'B'
+		else: sortkey = 'A'
+	else:
+		if cell == '' or cell is None: sortkey = 'A'
+		elif re.search(r'^\d', cell): sortkey = 'B'
+		else: sortkey = 'C'
+	sortkey += cell or ''
+	return sortkey
+
+def tasklist_sort_callback(model, iter_a, iter_b, cb_data):
+	cell_a = model[iter_a][cb_data['col_num']]
+	cell_b = model[iter_b][cb_data['col_num']]
+	col_id, order = cb_data['sort_model'].get_sort_column_id()
+	sortkey_a = make_tasklist_sortkey(cell_a, order)
+	sortkey_b = make_tasklist_sortkey(cell_b, order)
+	return cmp(sortkey_a, sortkey_b)
 
 def filter_tasklist():
 	tasklist_filtered.refilter()
@@ -1614,7 +1647,7 @@ directory_watcher = inotifyx.init()
 inotifyx.add_watch(directory_watcher, NOTES_DIR, inotifyx.IN_MODIFY | inotifyx.IN_CREATE | inotifyx.IN_DELETE | inotifyx.IN_MOVE)
 glib.io_add_watch(directory_watcher, glib.IO_IN|glib.IO_OUT, on_notes_dir_changed)
 
-tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('updated', str), ('due', str))
+tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('updated', str), ('date', str), ('due', str))
 tasklist.connect('row-changed', on_tasklist_changed)
 tasklist.connect('row-deleted', on_tasklist_changed)
 tasklist.connect('row-inserted', on_tasklist_changed)
@@ -1622,20 +1655,32 @@ tasklist.connect('row-inserted', on_tasklist_changed)
 tasklist_filtered = tasklist.filter_new()
 tasklist_filtered.set_visible_func(tasklist_filterer)
 tasklist_sorted = TreeModelSort(tasklist_filtered)
+for col_name in 'date', 'due':
+	col_num = tasklist.get_column_num(col_name)
+	tasklist_sorted.set_sort_func(col_num, tasklist_sort_callback, {'col_name': col_name, 'col_num': col_num, 'sort_model': tasklist_sorted})
 tasklist_sorted.set_sort_column_id(tasklist.get_column_num(Props.get('field/tasklist/sort-by', 'due')), int(Props.get('field/tasklist/sort-order', gtk.SORT_ASCENDING)))
 
 tasklist_top_label = gtk.Label()
 tasklist_top_label.set_alignment(1, 0)
 
 tasklist_view = TreeView(tasklist_sorted)
-add_treeview_columns(tasklist_view, [
-	('headline_markup', _("Task"), 'markup', tasklist.get_column_num('headline_markup')),
-	('updated', _("Updated"), 'text', tasklist.get_column_num('updated')),
-	('due', _("Due"), 'text', tasklist.get_column_num('due')),
-])
+tasklist_view_columns_set = {
+	'headline_markup': [_("Task"), 'markup', tasklist.get_column_num('headline_markup')],
+	'updated': [_("Updated"), 'text', tasklist.get_column_num('updated')],
+	'due': [_("Due"), 'text', tasklist.get_column_num('due')],
+	'date': [_("Date"), 'text', tasklist.get_column_num('date')],
+}
+tasklist_view_columns_display_init = []
+for col_name in (Props['layout/panel/tasklist/columns-order'] or 'headline_markup\nupdated\ndue\ndate').strip().split('\n'):
+	col = tasklist_view_columns_set[col_name][:]
+	col.insert(0, col_name)
+	tasklist_view_columns_display_init.append(col)
+	del col
+add_treeview_columns(tasklist_view, tasklist_view_columns_display_init)
 tasklist_view.set_reorderable(True)
 tasklist_view.set_headers_clickable(True)
 tasklist_view.connect('menu-popup', on_tasklist_menu)
+tasklist_view.connect('columns-changed', lambda treeview: Props.__setitem__('layout/panel/tasklist/columns-order', '\n'.join(map(lambda tvc: tvc.get_data('name'), treeview.get_columns()))))
 
 tasklist_selection = tasklist_view.get_selection()
 tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
