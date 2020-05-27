@@ -21,14 +21,17 @@ import inotifyx
 
 
 APPNAME = 'unote'
-NOTES_DIR = os.path.expanduser('~/Notes')
-NOTES_ARCHIVE_DIR = os.path.expanduser('~/Notes/.Archive')
+try:
+	NOTES_DIR = sys.argv[1]
+except IndexError:
+	NOTES_DIR = os.path.expanduser('~/Notes')
 NOTESFILE_EXCLUDES = ['*~', '*.bak']
 # define what counts as a word in task texts and search query text:
 taskbody_word_re = r'[#\w-]'
 
 
 NOTES_DIR = NOTES_DIR.rstrip(os.path.sep)
+NOTES_ARCHIVE_DIR = os.path.join(NOTES_DIR, '.Archive')
 NOTES_ARCHIVE_DIR = NOTES_ARCHIVE_DIR.rstrip(os.path.sep)
 
 
