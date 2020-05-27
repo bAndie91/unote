@@ -30,7 +30,7 @@
   - any word starting with hashmark in the note's text, eg. `#grocery` can be used as keyword or tag
   - Tag Completion
     - when you're typing a tag in the search box or in the task text, a list of options pops up
-    - walk on the list by <kdb>Tab</kbd> and <kbd>Shift-Tab</kbd>, choose one by <kbd>Ctrl-Enter</kbd>
+    - walk on the list by <kbd>Tab</kbd> and <kbd>Shift-Tab</kbd>, choose one by <kbd>Ctrl-Enter</kbd>
 - Note/Task Editor
   - it does not want to be a rich text editor, more like a physical sticky note
   - Text formatting
@@ -64,22 +64,22 @@
 
 # Keybinding
 
-- <kdb>Ctrl-Q</kbd> Quit
-- <kdb>Ctrl-F</kbd>, <kdb>Ctrl-L</kbd> Focus on search field
-- <kdb>Ctrl-T</kbd> Focus on Task area
-- <kdb>Ctrl-S</kbd> Save current search expression to the quick search list
-- <kdb>Ctrl-N</kbd> New task
-- <kdb>Ctrl-Shift-L</kbd> Change layout
-- <kdb>Ctrl-Shift-W</kbd> Wrap text on/off
-- <kdb>Mod1-Up</kbd>, <kdb>Mod1-Down</kbd> Open prev/next task on the list
-- <kdb>Mod1-Left</kbd>, <kdb>Mod1-Right</kbd> Open previously opened task, ie. walk back/forward in the history
+- <kbd>Ctrl-Q</kbd> Quit
+- <kbd>Ctrl-F</kbd>, <kbd>Ctrl-L</kbd> Focus on search field
+- <kbd>Ctrl-T</kbd> Focus on Task area
+- <kbd>Ctrl-S</kbd> Save current search expression to the quick search list
+- <kbd>Ctrl-N</kbd> New task
+- <kbd>Ctrl-Shift-L</kbd> Change layout
+- <kbd>Ctrl-Shift-W</kbd> Wrap text on/off
+- <kbd>Mod1-Up</kbd>, <kbd>Mod1-Down</kbd> Open prev/next task on the list
+- <kbd>Mod1-Left</kbd>, <kdb>Mod1-Right</kbd> Open previously opened task, ie. walk back/forward in the history
 
 ## Editor Keybinding
 
-- <kdb>Ctrl-B</kbd> Bold selected text
+- <kbd>Ctrl-B</kbd> Bold selected text
 - <kbd>Ctrl-Z</kbd> Undo
 - <kbd>Ctrl-Shift-Z</kbd>, <kbd>Ctrl-Y</kbd> Redo
-- <kdb>Tab</kbd>, <kbd>Shift-Tab</kbd>
+- <kbd>Tab</kbd>, <kbd>Shift-Tab</kbd>
   - Indent/deindent selected text
   - Select next/prev suggestion from the auto-completion list (standing on a tag)
 - <kbd>Ctrl-Enter</kbd>
