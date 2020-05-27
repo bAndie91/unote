@@ -1501,14 +1501,19 @@ def on_taskbody_view_keypress(widget, event):
 		return True
 	if keys.control:
 		if keys.enter:
+			text = taskbody_buffer.get_text_all()
 			pos = taskbody_buffer.cursor_pos
-			for start, end, Xhideranges in find_markup_positions(taskbody_buffer.get_text_all(), 'link'):
+			for start, end, Xhideranges in find_markup_positions(text, 'link'):
 				if start <= pos < end:
 					link = taskbody_buffer.get_text_all()[start:end]
 					if link.startswith('file://'):
 						link = os.path.expanduser(link[7:])
 					run_async('xdg-open', [link])
 					return True
+			c_word = current_word(text, pos, word_re=taskbody_word_re)
+			if c_word.startswith('#'):
+				searchbox.set_text(searchbox.get_text() + ' ' + c_word)
+				return True
 		elif keys.B:
 			s = taskbody_buffer.get_selected_text()
 			if s.startswith('*') and s.endswith('*') and len(s)>2:
