@@ -36,7 +36,7 @@
   - Text formatting
     - head line is always big font
     - `*bold*` → **bold**
-    - `red !!` → <span style="color:red">red !!</span>, `text <!>` → text <span style="color:red">&lt;!&gt;</span>
+    - `red !!` → <span style="color:red">red !!</span>, `text <!>` → text <span style="color:red">&lt;!&gt;</span> (the line is supposed to be in red for `!!`)
     - \``inline code`\` → `inline code` (markdown-style triple-backtick also works for multiline code block)
     - lines get stroken through when you put some "conclusion marker" at the end, eg:
       - `strike through ✓` → ~~strike through~~ ✓
