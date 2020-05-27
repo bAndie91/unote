@@ -35,15 +35,15 @@
   - it does not want to be a rich text editor, more like a physical sticky note
   - Text formatting
     - head line is always big font
-    - `*bold*` → *bold*
-    - `red !!` → <span color=red>red !!</span>, `text <!>` → text <span color=red>&lt;!&gt;</span>
-    - `\`inline code\`` → `inline code` (markdown-style triple-backtick also works for multiline code block)
+    - `*bold*` → **bold**
+    - `red !!` → <span style="color:red">red !!</span>, `text <!>` → text <span style="color:red">&lt;!&gt;</span>
+    - \``inline code`\` → `inline code` (markdown-style triple-backtick also works for multiline code block)
     - lines get stroken through when you put some "conclusion marker" at the end, eg:
       - `strike through ✓` → ~~strike through~~ ✓
       - `strike through DONE` → ~~strike through~~ DONE
       - `strike through WONTFIX` → ~~strike through~~ WONTFIX
       - markers: `✓` `✔` `✗` `✘` `DONE` `WONTFIX` `OBSOLETED` `[DONE]` `[WONTFIX]` `[OBSOLETED]`
-    - `scheme://link` → (scheme://link)[scheme://link] (for any url scheme)
+    - `http://link` → [http://link](http://link) (for any url scheme)
   - `date:YYYY-MM-DD` and `due:YYYY-MM-DD` keywords 
     - trigger a calendar widget to pop up 
     - are shown in the Task List
@@ -72,7 +72,7 @@
 - <kbd>Ctrl-Shift-L</kbd> Change layout
 - <kbd>Ctrl-Shift-W</kbd> Wrap text on/off
 - <kbd>Mod1-Up</kbd>, <kbd>Mod1-Down</kbd> Open prev/next task on the list
-- <kbd>Mod1-Left</kbd>, <kdb>Mod1-Right</kbd> Open previously opened task, ie. walk back/forward in the history
+- <kbd>Mod1-Left</kbd>, <kbd>Mod1-Right</kbd> Open previously opened task, ie. walk back/forward in the history
 
 ## Editor Keybinding
 
