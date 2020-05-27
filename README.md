@@ -9,6 +9,7 @@
 - mimic old school paper-and-pen note taking process with the ease of search capability
 - "Get Things Done" mindset
 - based on plain text files - you can access your notes even without µNote; no vendor-lock
+- optimize for keyboard
 
 # Parts
 
