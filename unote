@@ -998,7 +998,8 @@ def find_markup_positions(text, markupname):
 		for match in re.finditer(r'\b([a-z+-]+://[^\s]+)', text, re.I):
 			yield match.start(0), match.end(0), []
 	elif markupname == 'strike':
-		for match in re.finditer(ur'^[ \t]*(?:-[ \t]*)?(.+?)([ \t]+(DONE|WONTFIX|OBSOLETED)|[ \t]*(✓|✔|✗|✘|\[(DONE|WONTFIX|OBSOLETED)\]))', text, re.U|re.M):
+		regex = u'^[ \t]*(?:-[ \t]*)?(.+?)([ \t]+(DONE|WONTFIX|OBSOLETED)|[ \t]*(✓|✔|✗|✘|\[(DONE|WONTFIX|OBSOLETED)\]))'
+		for match in re.finditer(regex, text, re.U|re.M):
 			yield match.start(1), match.end(1), []
 	elif markupname in ['bold', 'alert']:
 		coderanges = [(s, e) for s, e, h in find_coderanges(text)]
