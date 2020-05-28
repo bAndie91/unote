@@ -71,7 +71,6 @@
 - <kbd>Ctrl-S</kbd> Save current search expression to the quick search list
 - <kbd>Ctrl-N</kbd> New task
 - <kbd>Ctrl-Shift-L</kbd> Change layout
-- <kbd>Ctrl-Shift-W</kbd> Wrap text on/off
 - <kbd>Mod1-Up</kbd>, <kbd>Mod1-Down</kbd> Open prev/next task on the list
 - <kbd>Mod1-Left</kbd>, <kbd>Mod1-Right</kbd> Open previously opened task, ie. walk back/forward in the history
 
@@ -86,3 +85,14 @@
 - <kbd>Ctrl-Enter</kbd>
   - Open link currently under the cursor
   - Add tag currently under the cursor to the search field
+- <kbd>Ctrl-Shift-W</kbd> Wrap text on/off
+
+# Dependencies
+
+- python2.7 or python3.6
+- python-gtk2 or (python3-gi and gir1.2-gtk-2.0)
+- python modules
+  - xdg
+  - dateutil
+  - xattr
+  - inotifyx (python2–only, TODO porting to python3)

@@ -1,13 +1,20 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import gtk
+try:
+	import gtk
+except ImportError:
+	import gi
+	from gi import pygtkcompat
+	pygtkcompat.enable() 
+	pygtkcompat.enable_gtk(version='2.0')
+	import gtk
 import glib
 import pango
+import gobject
 import time
 import re
 import glob
-import gobject
 fnmatch = glob.fnmatch.fnmatch
 import sys
 import os
