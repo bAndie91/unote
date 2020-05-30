@@ -717,10 +717,17 @@ class ActionStockMenuItem(gtk.ImageMenuItem):
 		if action is not None:
 			self.connect('activate', action)
 
+def save_treeview_column_sort(tvc):
+	Props['field/tasklist/sort-by'] = tvc.get_name()
+	Props['field/tasklist/sort-order'] = int(tvc.get_sort_order())
+
+def save_treeview_column_width(tvc, Xprop):
+	Props['layout/column/%s/width' % tvc.get_name()] = tvc.get_width()
+
 def add_treeview_columns(treeview, columns):
 	for col_name, col_title, col_attr, col_num in columns:
 		tvc = gtk.TreeViewColumn()
-		tvc.set_data('name', col_name)
+		tvc.set_name(col_name)
 		tvc.set_title(col_title)
 		tvc.set_sort_indicator(True)
 		tvc.set_sort_column_id(col_num)
@@ -738,11 +745,8 @@ def add_treeview_columns(treeview, columns):
 			tvc.set_fixed_width(int(width))
 		else:
 			tvc.set_fixed_width(100)
-		tvc.connect('notify::width', lambda widget, prop: Props.__setitem__('layout/column/%s/width'%widget.get_title(), widget.get_width()))
-		tvc.connect('clicked', lambda tvc: (
-			Props.__setitem__('field/tasklist/sort-by', tvc.get_data('name')),
-			Props.__setitem__('field/tasklist/sort-order', int(tvc.get_sort_order())),
-		))
+		tvc.connect('notify::width', save_treeview_column_width)
+		tvc.connect('clicked', save_treeview_column_sort)
 
 def main_quit():
 	save_position()
@@ -939,7 +943,7 @@ def load_tasklist():
 		else:
 			treeiter = tasklist.append(None, {})
 		update_task_in_list(tasklist, treeiter, task_text, task_file)
-	loaded_file_path = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
+	loaded_file_path = add_path_prefix(RuntimeData.get('loaded-task-file'))
 	for task_file, row in rows_to_forget.iteritems():
 		if loaded_file_path == task_file:
 			# currently opened task is gone from the overall task list, close it
@@ -965,7 +969,7 @@ def process_tasklist():
 	tasklist.foreach(count_tags, AllTags)
 
 def save_position():
-	filepath = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
+	filepath = add_path_prefix(RuntimeData.get('loaded-task-file'))
 	if filepath is not None and os.path.exists(filepath):
 		pos = taskbody_buffer.cursor_pos
 		try:
@@ -1056,8 +1060,8 @@ def parse_taskbody(text):
 def load_task(task_file_nonprefixed, task_text):
 	act_close_task()
 	load_taskbody(task_text)
-	taskbody_view.set_data('loaded-task-file', task_file_nonprefixed)
-	taskbody_view.set_data('unsaved', False)
+	RuntimeData['loaded-task-file'] = task_file_nonprefixed
+	RuntimeData['unsaved'] = False
 	Props['history/last/opened-task/path'] = task_file_nonprefixed
 	taskhistorylist.push(task_file_nonprefixed)
 	# restore cursor position:
@@ -1079,7 +1083,7 @@ def on_tasklist_selection_change(selection):
 	iterpath = iterpaths[0]
 	# TODO: support multiple loaded task
 	row = model[iterpath]
-	loaded_task_file = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
+	loaded_task_file = add_path_prefix(RuntimeData.get('loaded-task-file'))
 	if loaded_task_file is not None and loaded_task_file == row['file']:
 		return
 	load_task(strip_path_prefix(row['file']), row['raw_text'])
@@ -1360,7 +1364,7 @@ def get_tasklist_treeiter_by_file(q_file):
 	raise KeyError(_("No row with file=='%s'") % q_file)
 
 def save_task():
-	filepath = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
+	filepath = add_path_prefix(RuntimeData.get('loaded-task-file'))
 	if filepath is not None:
 		treeiter = get_tasklist_treeiter_by_file(filepath)
 		text = tasklist[treeiter]['raw_text']
@@ -1368,12 +1372,12 @@ def save_task():
 			f.write(text)
 
 def on_taskbody_changed(*X):
-	taskbody_view.set_data('unsaved', True)
+	RuntimeData['unsaved'] = True
 	text = taskbody_buffer.get_text_all()
 	# re-parse
 	parse_taskbody(text)
 	# represent task text in the task list
-	loaded_task_file = taskbody_view.get_data('loaded-task-file')
+	loaded_task_file = RuntimeData.get('loaded-task-file')
 	if loaded_task_file is None:
 		# don't save new task until at least one line is entered,
 		# and generate file name from the first line
@@ -1382,7 +1386,7 @@ def on_taskbody_changed(*X):
 		first_line = m.group(1)
 		filepath = find_nonexistent_file(NOTES_DIR, filenameize(first_line) + '.txt')
 		open(filepath, 'w').write(text)
-		taskbody_view.set_data('loaded-task-file', strip_path_prefix(filepath))
+		RuntimeData['loaded-task-file'] = strip_path_prefix(filepath)
 	else:
 		loaded_task_file = add_path_prefix(loaded_task_file)
 		treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
@@ -1586,13 +1590,13 @@ def taskbody_remove_text_around_cursor(s):
 
 def act_close_task():
 	save_position()
-	if taskbody_view.get_data('unsaved'):
+	if RuntimeData.get('unsaved'):
 		# save the currentlly loaded task now, and leave scheduled save_task() there, 
 		# it'll not save the task which it was called upon, but an other one - it's not a problem 
 		# since we have auto-saving anyway.
 		save_task()
-	taskbody_view.set_data('loaded-task-file', None)
-	taskbody_view.set_data('unsaved', False)
+	RuntimeData['loaded-task-file'] = None
+	RuntimeData['unsaved'] = False
 	taskbody_buffer.reinit('')
 
 def act_new_task():
@@ -1603,6 +1607,7 @@ def act_new_task():
 
 Timers = {}
 Props = PropertyTree()
+RuntimeData = {}
 AllTags = {}
 VisibleTaskTags = {}
 
@@ -1696,7 +1701,7 @@ add_treeview_columns(tasklist_view, tasklist_view_columns_display_init)
 tasklist_view.set_reorderable(True)
 tasklist_view.set_headers_clickable(True)
 tasklist_view.connect('menu-popup', on_tasklist_menu)
-tasklist_view.connect('columns-changed', lambda treeview: Props.__setitem__('layout/panel/tasklist/columns-order', '\n'.join(map(lambda tvc: tvc.get_data('name'), treeview.get_columns()))))
+tasklist_view.connect('columns-changed', lambda treeview: Props.__setitem__('layout/panel/tasklist/columns-order', '\n'.join(map(lambda tvc: tvc.get_name(), treeview.get_columns()))))
 
 tasklist_selection = tasklist_view.get_selection()
 tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
