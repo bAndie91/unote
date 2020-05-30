@@ -41,6 +41,32 @@ if not hasattr(pango, 'SCALE_X_LARGE'):
 	pango.SCALE_X_LARGE = 1.44
 if not hasattr(gtk.TreeStore, 'insert_with_values') and hasattr(gtk.TreeStore, 'insert_with_valuesv'):
 	gtk.TreeStore.insert_with_values = gtk.TreeStore.insert_with_valuesv
+if hasattr(gtk, '_introspection_module') and not hasattr(gtk._introspection_module.TreeStore, 'set'):
+	def gtk__introspection_module_TreeStore_set(self, treeiter, columns, values):
+		for idx in list(range(len(columns))):
+			gtk._introspection_module.TreeStore.set_value(self, treeiter, columns[idx], values[idx])
+	gtk._introspection_module.TreeStore.set = gtk__introspection_module_TreeStore_set
+if hasattr(gtk, '_introspection_module'):
+	treesortable = gtk.TreeModelSort()
+	try:
+		treesortable.get_sort_column_id()
+	except TypeError:
+		def gtk_TreeSortable_get_sort_column_id(self):
+			for n_col in list(range(self.get_n_columns())):
+				for order in gtk.SORT_ASCENDING, gtk.SORT_DESCENDING:
+					answer = gtk._introspection_module.TreeSortable.get_sort_column_id(self, n_col, order)
+					if answer: return (n_col, order)
+			return (None, None)
+		gtk._overrides_module.TreeSortable.get_sort_column_id = gtk_TreeSortable_get_sort_column_id
+	finally:
+		del treesortable
+try:
+	cmp
+except NameError:
+	def cmp(a, b):
+		if a < b: return -1
+		if b < a: return 1
+		return 0
 
 
 
@@ -501,9 +527,13 @@ class TreeModelSort(gtk.TreeModelSort):
 		_proxy_userdata = {'func': func, 'userdata': userdata, 'derived_model': self}
 		super(self.__class__, self).foreach(TreeModelProxy._proxy_foreach, _proxy_userdata)
 	def get(self, row, *columns):
-		raise(Exception('unimplemented'))
+		if not all([isinstance(col, int) for col in columns]):
+			raise(Exception('unimplemented'))
+		super(self.__class__, self).get(row, *columns)
 	def get_value(self, treeiter, column):
-		raise(Exception('unimplemented'))
+		if not isinstance(column, int):
+			raise(Exception('unimplemented'))
+		super(self.__class__, self).get_value(treeiter, column)
 
 class TreeStore(gtk.TreeStore):
 	__gsignals__ = {
@@ -1003,10 +1033,10 @@ def load_tasklist():
 	for task_text, task_file in load_tasks():
 		if task_file in rows_to_forget:
 			treeiter = rows_to_forget[task_file].iter
+			update_task_in_list(tasklist, treeiter, task_text, task_file)
 			del rows_to_forget[task_file]
 		else:
-			treeiter = tasklist.append(None, {})
-		update_task_in_list(tasklist, treeiter, task_text, task_file)
+			tasklist.append(None, {'raw_text': task_text, 'file': task_file})
 	loaded_file_path = add_path_prefix(RuntimeData.get('loaded-task-file'))
 	for task_file, row in rows_to_forget.items():
 		if loaded_file_path == task_file:
@@ -1147,10 +1177,11 @@ def on_tasklist_selection_change(selection):
 	iterpath = iterpaths[0]
 	# TODO: support multiple loaded task
 	row = model[iterpath]
-	loaded_task_file = add_path_prefix(RuntimeData.get('loaded-task-file'))
-	if loaded_task_file is not None and loaded_task_file == row['file']:
-		return
-	load_task(strip_path_prefix(row['file']), row['raw_text'])
+	if row['raw_text'] is not None:
+		loaded_task_file = add_path_prefix(RuntimeData.get('loaded-task-file'))
+		if loaded_task_file is not None and loaded_task_file == row['file']:
+			return
+		load_task(strip_path_prefix(row['file']), row['raw_text'])
 
 def timer_once(sec, func, func_args=(), reschedule=True):
 	iden = func.__name__
@@ -1380,7 +1411,7 @@ def filter_tasklist():
 		completion_items = sort_tags_by_count(completion_items)
 		completion_suggestions_box.set_items(completion_items)
 
-def tasklist_filterer(model, treeiter):
+def tasklist_filterer(model, treeiter, *X):
 	query = searchbox.get_text()
 	query = query.strip()
 	return tasklist_filterer_with_custom_query(model, treeiter, query)
