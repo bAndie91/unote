@@ -89,10 +89,11 @@
 
 # Dependencies
 
-- python2.7 or python3.6
-- python-gtk2 or (python3-gi and gir1.2-gtk-2.0)
+- python-gtk2 (AKA pygtk)
 - python modules
   - xdg
   - dateutil
   - xattr
-  - inotifyx (python2–only, TODO porting to python3)
+  - inotifyx (python-inotify support is on branch)
+
+See python2.7 + python3.6 multiport on 'py3' branch. It's unstable yet due to missing GTK+2.0 support.
