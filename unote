@@ -776,10 +776,12 @@ def select_or_load_task_by_file(task_file_nonprefixed):
 			data['text'] = model[treepath]['raw_text']
 			return True
 	data = {'text': None, 'iter': None, 'file_nonprefixed': task_file_nonprefixed}
-	tasklist_view.get_model().foreach(find_task_by_file, data)
+	model = tasklist_view.get_model()
+	model.foreach(find_task_by_file, data)
 	if data['iter'] is not None:
 		tasklist_selection.unselect_all()
 		tasklist_selection.select_iter(data['iter'])
+		tasklist_view.scroll_to_cell(model.get_path(data['iter']))
 	else:
 		tasklist.foreach(find_task_by_file, data)
 		if data['text'] is not None:
@@ -1160,6 +1162,7 @@ def act_tasklist_select_updown(up=True):
 	if s_iter is not None:
 		tasklist_selection.unselect_all()
 		tasklist_selection.select_iter(s_iter)
+		tasklist_view.scroll_to_cell(model.get_path(s_iter))
 
 def act_tasklist_select_prevnext(prev=True):
 	if prev:
