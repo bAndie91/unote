@@ -24,7 +24,24 @@ from dateutil.relativedelta import relativedelta
 import xattr
 import errno
 import traceback
-import inotifyx
+try:
+	import inotifyx
+except ImportError:
+	import inotify.adapters
+	import inotify.calls
+	import inotify.constants
+
+# Backward compatibility
+try:
+	unicode
+except NameError:
+	class unicode(str):
+		pass
+if not hasattr(pango, 'SCALE_X_LARGE'):
+	pango.SCALE_X_LARGE = 1.44
+if not hasattr(gtk.TreeStore, 'insert_with_values'):
+	gtk.TreeStore.insert_with_values = gtk.TreeStore.insert_with_valuesv
+
 
 
 APPNAME = 'unote'
@@ -292,7 +309,7 @@ class TextBuffer(gtk.TextBuffer):
 		if eol == -1: eol = len(text)
 		return sol, eol
 	def get_current_line(self):
-		sol, eol = map(self.get_iter_at_offset, self.get_current_line_boundaries())
+		sol, eol = list(map(self.get_iter_at_offset, self.get_current_line_boundaries()))
 		return self.get_slice(sol, eol, include_hidden_chars=True)
 	def apply_tag_by_name(self, tagname, pos1, pos2):
 		super(self.__class__, self).apply_tag_by_name(tagname, self.get_iter_at_offset(pos1), self.get_iter_at_offset(pos2))
@@ -359,12 +376,15 @@ class CompletionSuggestionsBox(gtk.TextView):
 		self.get_buffer().create_tag('active_suggestion', background='yellow', weight=pango.WEIGHT_BOLD)
 		self.get_buffer().create_tag('inactive_suggestion')
 		# style
-		bgcolor = gtk.gdk.Color('lightgrey')
+		try:
+			bgcolor = gtk.gdk.Color('lightgrey')
+		except TypeError:
+			bgcolor = gtk.gdk.Color(211, 211, 211)
 		self.modify_base(gtk.STATE_NORMAL, bgcolor)
 	def filter_for(self, word):
 		last_suggestion = self.current_suggestion
 		self._filterer_word = word
-		self._shown_items = filter(lambda item: self._filter_func(word, item), self._all_items)
+		self._shown_items = [item for item in self._all_items if self._filter_func(word, item)]
 		idx = -1
 		if last_suggestion is not None:
 			try: idx = self._shown_items.index(last_suggestion)
@@ -403,10 +423,10 @@ class CompletionSuggestionsBox(gtk.TextView):
 	def set_items(self, items):
 		for item in items:
 			assert isinstance(item, dict)
-			assert item.has_key('word')
+			assert 'word' in item
 		self._all_items = items[:]
 		for item in self._all_items:
-			if not item.has_key('label') or item['label'] is None:
+			if 'label' not in item or item['label'] is None:
 				item['label'] = item['word']
 		self.filter_for(self._filterer_word)
 
@@ -535,9 +555,9 @@ class TreeStore(gtk.TreeStore):
 		answer = tuple(answer)
 		return answer
 	def get_value(self, treeiter, column):
-		raise(Exception('unimplemented'))
+		return super(self.__class__, self).get_value(treeiter, column)
 	def convert_cell(self, col_num, cell_value):
-		if self.reader.has_key(col_num):
+		if col_num in self.reader:
 			return self.reader[col_num](cell_value)
 		return cell_value
 	def __getitem__(self, item):
@@ -547,7 +567,7 @@ class TreeStore(gtk.TreeStore):
 		if type(row) == dict:
 			cols = row
 			row = self.empty[:]
-			for col_name, value in cols.iteritems():
+			for col_name, value in cols.items():
 				row[self.get_column_num(col_name)] = value
 		return super(self.__class__, self).append(parent, row)
 	def set(self, treeiter, *itempairs):
@@ -555,9 +575,14 @@ class TreeStore(gtk.TreeStore):
 		if type(itempairs[0]) == dict:
 			cols = itempairs[0]
 			itempairs = []
-			for col_name, value in cols.iteritems():
+			for col_name, value in cols.items():
 				itempairs.extend([self.get_column_num(col_name), value])
 		super(self.__class__, self).set(treeiter, *itempairs)
+	def get_iter_root(self):
+		if hasattr(super(self.__class__, self), 'get_iter_root'):
+			return super(self.__class__, self).get_iter_root()
+		else: 
+			return self.get_iter_first()
 	def get_cells_by_column(self, col_name):
 		treeiter = self.get_iter_root()
 		while treeiter is not None:
@@ -626,6 +651,12 @@ class Calendar(gtk.Calendar):
 		self.connect('button-release-event', self.on_mouse_clicked)
 		self.connect('day-selected-double-click', self.on_mark)
 		self.connect('month-changed', self.on_paging)
+	@property
+	def selected_day(self):
+		return (self.selected_day_year, self.selected_day_month, self.selected_day_day)
+	@selected_day.setter
+	def selected_day(self, date):
+		self.selected_day_year, self.selected_day_month, self.selected_day_day = date[:]
 	def on_mouse_click(self, widget, event):
 		if event.button == 3:
 			self.popup_menu.popup(None, None, None, event.button, event.time)
@@ -677,7 +708,7 @@ class Calendar(gtk.Calendar):
 		self.on_paging()
 	def get_marks(self):
 		response = []
-		for year, month, day in self._marks.keys():
+		for year, month, day in list(self._marks.keys()):
 			response.append(date_format % (year, month, day))
 		return response
 	def on_mark(self, *X):
@@ -685,7 +716,7 @@ class Calendar(gtk.Calendar):
 		self.do_mark(c_year, c_month, c_day)
 	def do_mark(self, c_year, c_month, c_day):
 		was_marked = False
-		for year, month, day in self._marks.keys():
+		for year, month, day in list(self._marks.keys()):
 			if year == c_year and month == c_month and c_day == day:
 				was_marked = True
 				del self._marks[(year, month, day)]
@@ -717,10 +748,17 @@ class ActionStockMenuItem(gtk.ImageMenuItem):
 		if action is not None:
 			self.connect('activate', action)
 
+def save_treeview_column_sort(tvc):
+	Props['field/tasklist/sort-by'] = tvc.get_name
+	Props['field/tasklist/sort-order'] = int(tvc.get_sort_order())
+
+def save_treeview_column_width(tvc, Xprop):
+	Props['layout/column/%s/width' % tvc.get_name()] = tvc.get_width()
+
 def add_treeview_columns(treeview, columns):
 	for col_name, col_title, col_attr, col_num in columns:
 		tvc = gtk.TreeViewColumn()
-		tvc.set_data('name', col_name)
+		tvc.set_name(col_name)
 		tvc.set_title(col_title)
 		tvc.set_sort_indicator(True)
 		tvc.set_sort_column_id(col_num)
@@ -733,21 +771,18 @@ def add_treeview_columns(treeview, columns):
 		tvc.add_attribute(cr_txt, col_attr, col_num)
 		
 		treeview.append_column(tvc)
-		width = Props['layout/column/%s/width'%col_title]
+		width = Props['layout/column/%s/width' % col_name]
 		if width is not None:
 			tvc.set_fixed_width(int(width))
 		else:
 			tvc.set_fixed_width(100)
-		tvc.connect('notify::width', lambda widget, prop: Props.__setitem__('layout/column/%s/width'%widget.get_title(), widget.get_width()))
-		tvc.connect('clicked', lambda tvc: (
-			Props.__setitem__('field/tasklist/sort-by', tvc.get_data('name')),
-			Props.__setitem__('field/tasklist/sort-order', int(tvc.get_sort_order())),
-		))
+		tvc.connect('notify::width', save_treeview_column_width)
+		tvc.connect('clicked', save_treeview_column_sort)
 
 def main_quit():
 	save_position()
 	# execute outstanding timers
-	for iden in Timers.keys():
+	for iden in list(Timers.keys()):
 		glib.source_remove(Timers[iden]['handle'])
 		timer_call(iden, Timers[iden]['func'], Timers[iden]['args'])
 	# quit gtk loop
@@ -807,7 +842,7 @@ class PropertyTree(dict):
 		super(self.__class__, self).__setitem__(propname, propvalue)
 		timer_once(self.write_delay, self._write)
 	def _write(self):
-		for propname, propvalue in self.iteritems():
+		for propname, propvalue in self.items():
 			if self.savedprops.get(propname) != propvalue:
 				propfile = os.path.join(xdg.BaseDirectory.save_config_path(APPNAME), 'prop', propname)
 				mkdir(os.path.dirname(propfile))
@@ -819,7 +854,7 @@ class HistoryList(object):
 	def __init__(self, size_limit=1024000, items=[], pointer=-1):
 		assert pointer < len(items)
 		if len(items) > 0 and pointer == -1: pointer = len(items)-1
-		assert (len(items) > 0 and pointer > 0) or (len(items) == 0 and pointer == -1)
+		assert (len(items) > 0 and pointer > -1) or (len(items) == 0 and pointer == -1)
 		super(self.__class__, self).__init__()
 		self.stack = items[:]
 		self.pointer = pointer
@@ -876,8 +911,41 @@ def getprops(*props):
 		values.append(Props[prop])
 	return values
 
-def on_notes_dir_changed(fd, Xcondition):
-	inotifyx.get_events(fd)
+class DirectoryWatcher(object):
+	eventnames = ('IN_MODIFY', 'IN_CREATE', 'IN_DELETE', 'IN_MOVE')
+	def __init__(self, directory, callback):
+		self._callback_func = callback
+		eventmask = 0
+		try:
+			inotifyx
+			backend = 'inotifyx'
+			for event in self.eventnames: eventmask |= getattr(inotifyx, event)
+		except NameError:
+			backend = 'inotify'
+			for event in self.eventnames: eventmask |= getattr(inotify.constants, event)
+		
+		if backend == 'inotifyx':
+			inofd = inotifyx.init()
+			inotifyx.add_watch(inofd, directory, eventmask)
+			inner_callback = self._callback_inotifyx
+		else:
+			self._inotify = inotify.adapters.Inotify()
+			inofd = self._inotify._Inotify__inotify_fd
+			self._inotify.add_watch(directory, mask=eventmask)
+			inner_callback = self._callback_inotify
+		
+		glib.io_add_watch(inofd, glib.IO_IN|glib.IO_OUT, inner_callback)
+		
+	def _callback_inotifyx(self, fd, Xcondition):
+		inotifyx.get_events(fd)
+		return self._callback_common()
+	def _callback_inotify(self, Xfd, Xcondition):
+		self._inotify.event_gen(timeout_s=0, yield_nones=False)
+		return self._callback_common()
+	def _callback_common(self):
+		return self._callback_func()
+
+def on_notes_dir_changed():
 	load_tasklist()
 	return True
 
@@ -931,16 +999,16 @@ def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, tas
 	treestore.set(treeiter, row)
 
 def load_tasklist():
-	rows_to_forget = dict(map(lambda x: (x[1], x[0]), tasklist.walk_columns('file')))
+	rows_to_forget = dict([(x[1], x[0]) for x in tasklist.walk_columns('file')])
 	for task_text, task_file in load_tasks():
-		if rows_to_forget.has_key(task_file):
+		if task_file in rows_to_forget:
 			treeiter = rows_to_forget[task_file].iter
 			del rows_to_forget[task_file]
 		else:
 			treeiter = tasklist.append(None, {})
 		update_task_in_list(tasklist, treeiter, task_text, task_file)
-	loaded_file_path = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
-	for task_file, row in rows_to_forget.iteritems():
+	loaded_file_path = add_path_prefix(RuntimeData.get('loaded-task-file'))
+	for task_file, row in rows_to_forget.items():
 		if loaded_file_path == task_file:
 			# currently opened task is gone from the overall task list, close it
 			act_close_task()
@@ -950,10 +1018,10 @@ def on_tasklist_changed(*X):
 	timer_once(0.25, process_tasklist)
 
 def sort_tags_by_count(tags):
-	return sorted(tags, cmp=lambda a, b: cmp(b['count'], a['count']))
+	return sorted(tags, key='count')
 
 def make_tag_suggestion_list(tags):
-	return sort_tags_by_count([{'label': '%s (%d)'%(key, tags[key]), 'word': key, 'count': tags[key]} for key in tags.keys()])
+	return sort_tags_by_count([{'label': '%s (%d)'%(key, tags[key]), 'word': key, 'count': tags[key]} for key in list(tags.keys())])
 
 def count_tags(model, path, treeiter, data):
 	task_text = model[path]['raw_text']
@@ -965,7 +1033,7 @@ def process_tasklist():
 	tasklist.foreach(count_tags, AllTags)
 
 def save_position():
-	filepath = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
+	filepath = add_path_prefix(RuntimeData.get('loaded-task-file'))
 	if filepath is not None and os.path.exists(filepath):
 		pos = taskbody_buffer.cursor_pos
 		try:
@@ -1056,8 +1124,8 @@ def parse_taskbody(text):
 def load_task(task_file_nonprefixed, task_text):
 	act_close_task()
 	load_taskbody(task_text)
-	taskbody_view.set_data('loaded-task-file', task_file_nonprefixed)
-	taskbody_view.set_data('unsaved', False)
+	RuntimeData['loaded-task-file'] = task_file_nonprefixed
+	RuntimeData['unsaved'] = False
 	Props['history/last/opened-task/path'] = task_file_nonprefixed
 	taskhistorylist.push(task_file_nonprefixed)
 	# restore cursor position:
@@ -1079,14 +1147,14 @@ def on_tasklist_selection_change(selection):
 	iterpath = iterpaths[0]
 	# TODO: support multiple loaded task
 	row = model[iterpath]
-	loaded_task_file = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
+	loaded_task_file = add_path_prefix(RuntimeData.get('loaded-task-file'))
 	if loaded_task_file is not None and loaded_task_file == row['file']:
 		return
 	load_task(strip_path_prefix(row['file']), row['raw_text'])
 
 def timer_once(sec, func, func_args=(), reschedule=True):
 	iden = func.__name__
-	if Timers.has_key(iden):
+	if iden in Timers:
 		if reschedule:
 			glib.source_remove(Timers[iden]['handle'])
 			del Timers[iden]
@@ -1307,7 +1375,8 @@ def filter_tasklist():
 		completion_items = list([{'word': key, 'count': 0} for key in VisibleTaskTags.keys()])
 		tasklist_view.get_model().foreach(count_tags_making_intersection, completion_items)
 		completion_items = filter(lambda item: item['count']>0, completion_items)
-		map(lambda item: item.update({'label': '%s (%d)'%(item['word'], item['count'])}), completion_items)
+		for item in completion_items:
+			item.update({'label': '%s (%d)'%(item['word'], item['count'])})
 		completion_items = sort_tags_by_count(completion_items)
 		completion_suggestions_box.set_items(completion_items)
 
@@ -1360,7 +1429,7 @@ def get_tasklist_treeiter_by_file(q_file):
 	raise KeyError(_("No row with file=='%s'") % q_file)
 
 def save_task():
-	filepath = add_path_prefix(taskbody_view.get_data('loaded-task-file'))
+	filepath = add_path_prefix(RuntimeData.get('loaded-task-file'))
 	if filepath is not None:
 		treeiter = get_tasklist_treeiter_by_file(filepath)
 		text = tasklist[treeiter]['raw_text']
@@ -1368,12 +1437,12 @@ def save_task():
 			f.write(text)
 
 def on_taskbody_changed(*X):
-	taskbody_view.set_data('unsaved', True)
+	RuntimeData['unsaved'] = True
 	text = taskbody_buffer.get_text_all()
 	# re-parse
 	parse_taskbody(text)
 	# represent task text in the task list
-	loaded_task_file = taskbody_view.get_data('loaded-task-file')
+	loaded_task_file = RuntimeData.get('loaded-task-file')
 	if loaded_task_file is None:
 		# don't save new task until at least one line is entered,
 		# and generate file name from the first line
@@ -1382,7 +1451,7 @@ def on_taskbody_changed(*X):
 		first_line = m.group(1)
 		filepath = find_nonexistent_file(NOTES_DIR, filenameize(first_line) + '.txt')
 		open(filepath, 'w').write(text)
-		taskbody_view.set_data('loaded-task-file', strip_path_prefix(filepath))
+		RuntimeData['loaded-task-file'] = strip_path_prefix(filepath)
 	else:
 		loaded_task_file = add_path_prefix(loaded_task_file)
 		treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
@@ -1586,13 +1655,13 @@ def taskbody_remove_text_around_cursor(s):
 
 def act_close_task():
 	save_position()
-	if taskbody_view.get_data('unsaved'):
+	if RuntimeData.get('unsaved'):
 		# save the currentlly loaded task now, and leave scheduled save_task() there, 
 		# it'll not save the task which it was called upon, but an other one - it's not a problem 
 		# since we have auto-saving anyway.
 		save_task()
-	taskbody_view.set_data('loaded-task-file', None)
-	taskbody_view.set_data('unsaved', False)
+	RuntimeData['loaded-task-file'] = None
+	RuntimeData['unsaved'] = False
 	taskbody_buffer.reinit('')
 
 def act_new_task():
@@ -1603,6 +1672,7 @@ def act_new_task():
 
 Timers = {}
 Props = PropertyTree()
+RuntimeData = {}
 AllTags = {}
 VisibleTaskTags = {}
 
@@ -1659,9 +1729,8 @@ searchbox.connect('icon-release', on_searchbox_icon_clicked)
 taskhistorylist = HistoryList(items=((Props['history/opened-tasks'] or '').split(chr(0))), pointer=int(Props['history/opened-task-pointer'] or -1))
 taskhistorylist.on_change = lambda: (Props.__setitem__('history/opened-tasks', chr(0).join(taskhistorylist[:])), Props.__setitem__('history/opened-task-pointer', str(taskhistorylist.pointer)))
 
-directory_watcher = inotifyx.init()
-inotifyx.add_watch(directory_watcher, NOTES_DIR, inotifyx.IN_MODIFY | inotifyx.IN_CREATE | inotifyx.IN_DELETE | inotifyx.IN_MOVE)
-glib.io_add_watch(directory_watcher, glib.IO_IN|glib.IO_OUT, on_notes_dir_changed)
+mkdir(NOTES_DIR)
+directory_watcher = DirectoryWatcher(directory=NOTES_DIR, callback=on_notes_dir_changed)
 
 tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('updated', str), ('date', str), ('due', str))
 tasklist.connect('row-changed', on_tasklist_changed)
@@ -1696,7 +1765,7 @@ add_treeview_columns(tasklist_view, tasklist_view_columns_display_init)
 tasklist_view.set_reorderable(True)
 tasklist_view.set_headers_clickable(True)
 tasklist_view.connect('menu-popup', on_tasklist_menu)
-tasklist_view.connect('columns-changed', lambda treeview: Props.__setitem__('layout/panel/tasklist/columns-order', '\n'.join(map(lambda tvc: tvc.get_data('name'), treeview.get_columns()))))
+tasklist_view.connect('columns-changed', lambda treeview: Props.__setitem__('layout/panel/tasklist/columns-order', '\n'.join([tvc.get_name() for tvc in treeview.get_columns()])))
 
 tasklist_selection = tasklist_view.get_selection()
 tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
