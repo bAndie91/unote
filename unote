@@ -39,7 +39,7 @@ except NameError:
 		pass
 if not hasattr(pango, 'SCALE_X_LARGE'):
 	pango.SCALE_X_LARGE = 1.44
-if not hasattr(gtk.TreeStore, 'insert_with_values'):
+if not hasattr(gtk.TreeStore, 'insert_with_values') and hasattr(gtk.TreeStore, 'insert_with_valuesv'):
 	gtk.TreeStore.insert_with_values = gtk.TreeStore.insert_with_valuesv
 
 
@@ -1018,7 +1018,7 @@ def on_tasklist_changed(*X):
 	timer_once(0.25, process_tasklist)
 
 def sort_tags_by_count(tags):
-	return sorted(tags, key='count')
+	return sorted(tags, key = lambda x: x['count'])
 
 def make_tag_suggestion_list(tags):
 	return sort_tags_by_count([{'label': '%s (%d)'%(key, tags[key]), 'word': key, 'count': tags[key]} for key in list(tags.keys())])
