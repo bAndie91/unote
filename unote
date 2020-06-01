@@ -1305,9 +1305,6 @@ def filter_tasklist():
 	tasklist_filtered.refilter()
 	tasklist_top_label.set_text(_("Found: %d") % len(tasklist_filtered))
 	
-	VisibleTaskTags.clear()
-	tasklist_filtered.foreach(count_tags, VisibleTaskTags)
-	
 	if completion_suggestions_box.get_visible():
 		query = searchbox.get_text()
 		pos = searchbox.get_property('cursor-position')
@@ -1317,7 +1314,7 @@ def filter_tasklist():
 				newquery, Xpos = replace_word(query, pos, item['word'], word_re=taskbody_word_re)
 				include = tasklist_filterer_with_custom_query(model, treeiter, newquery)
 				if include: item['count'] += 1
-		completion_items = list([{'word': key, 'count': 0} for key in VisibleTaskTags.keys()])
+		completion_items = list([{'word': key, 'count': 0} for key in AllTags.keys()])
 		tasklist_view.get_model().foreach(count_tags_making_intersection, completion_items)
 		completion_items = filter(lambda item: item['count']>0, completion_items)
 		map(lambda item: item.update({'label': '%s (%d)'%(item['word'], item['count'])}), completion_items)
@@ -1631,7 +1628,6 @@ Timers = {}
 Props = PropertyTree()
 RuntimeData = {}
 AllTags = {}
-VisibleTaskTags = {}
 
 main_win = gtk.Window()
 paned1 = gtk.HPaned()
