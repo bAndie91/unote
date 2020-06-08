@@ -1446,16 +1446,16 @@ def taskbody_view_toggle_wrap(*X):
 
 def on_taskbody_view_menu(Xtextview, menu):
 	pos = 0
-	if RuntimeData.get('loaded-task-file') is not None:
-		opened_file = add_path_prefix(RuntimeData.get('loaded-task-file'))
-		mi = ActionStockMenuItem(label=_("Done this"), stock_id=gtk.STOCK_APPLY, action=lambda Xwidget, opened_file: act_task_done([opened_file]), action_userdata=(opened_file,))
-		menu.insert(mi, pos)
-		pos += 1
 	if taskbody_buffer.get_has_selection():
 		mi = ActionStockMenuItem(label=_("Search"), stock_id=gtk.STOCK_FIND, action=act_search_selected_text)
 		menu.insert(mi, pos)
 		pos += 1
 		mi = ActionStockMenuItem(label=_("Refine Search"), stock_id=gtk.STOCK_FIND, action=act_refine_search_with_selected_text)
+		menu.insert(mi, pos)
+		pos += 1
+	if RuntimeData.get('loaded-task-file') is not None:
+		opened_file = add_path_prefix(RuntimeData.get('loaded-task-file'))
+		mi = ActionStockMenuItem(label=_("Done this task"), stock_id=gtk.STOCK_APPLY, action=lambda Xwidget, opened_file: act_task_done([opened_file]), action_userdata=(opened_file,))
 		menu.insert(mi, pos)
 		pos += 1
 	mi = ActionStockMenuItem(label=_("Default Font…"), stock_id=gtk.STOCK_SELECT_FONT, action=act_change_font)
