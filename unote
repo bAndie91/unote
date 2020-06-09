@@ -774,11 +774,17 @@ def add_treeview_columns(treeview, columns):
 		tvc.connect('clicked', save_treeview_column_sort)
 
 def main_quit():
-	save_position()
+	act_close_task()
 	# execute outstanding timers
 	for iden in Timers.keys():
 		glib.source_remove(Timers[iden]['handle'])
 		timer_call(iden, Timers[iden]['func'], Timers[iden]['args'])
+
+	sys.stderr.write(_("Waiting background threads to complete…\n"))
+	ioQueue.put(('exit', [], None))
+	ioQueue.join()
+	ioThread.join()
+	
 	# quit gtk loop
 	gtk.main_quit()
 
@@ -817,7 +823,7 @@ class PropertyTree(dict):
 		super(self.__class__, self).__init__(*args)
 		self.savedprops = {}
 		self.write_delay = 1.2
-	def __getitem__(self, propname):
+	def _read(self, propname):
 		propvalue = super(self.__class__, self).get(propname)
 		if propvalue is None:
 			for d in xdg.BaseDirectory.xdg_config_dirs:
@@ -825,10 +831,13 @@ class PropertyTree(dict):
 				if os.path.exists(path):
 					with open(path, 'r') as f:
 						propvalue = f.read()
-				if propvalue is not None:
-					self.savedprops[propname] = propvalue
-					super(self.__class__, self).__setitem__(propname, propvalue)
 					break
+		return propvalue
+	def __getitem__(self, propname):
+		propvalue = self._read(propname)
+		if propvalue is not None:
+			self.savedprops[propname] = propvalue
+			super(self.__class__, self).__setitem__(propname, propvalue)
 		return propvalue
 	def get(self, propname, default):
 		propvalue = self.__getitem__(propname)
@@ -836,11 +845,11 @@ class PropertyTree(dict):
 		return propvalue
 	def __setitem__(self, propname, propvalue):
 		super(self.__class__, self).__setitem__(propname, propvalue)
-		timer_once(self.write_delay, self._write, reschedule=False)
-	def _write(self):
+		timer_once(self.write_delay, self._write_all, reschedule=False)
+	def _write_all(self):
 		for propname, propvalue in self.iteritems():
 			propvalue = str(propvalue)
-			if self.savedprops.get(propname) != propvalue:
+			if self._read(propname) != propvalue:
 				propfile = os.path.join(xdg.BaseDirectory.save_config_path(APPNAME), 'prop', propname)
 				ioQueue.put(('mkdir', [os.path.dirname(propfile)], _("saving config…")))
 				ioQueue.put(('write', [propfile, propvalue], _("saving config…")))
@@ -1001,8 +1010,9 @@ def process_tasklist():
 
 def save_position():
 	filepath = add_path_prefix(RuntimeData.get('loaded-task-file'))
-	if filepath is not None and os.path.exists(filepath):
-		pos = taskbody_buffer.cursor_pos
+	saved_pos = RuntimeData.get('loaded-file-edit-position')
+	pos = taskbody_buffer.cursor_pos
+	if saved_pos != pos and filepath is not None and os.path.exists(filepath):
 		ioQueue.put(('setxattr', [filepath, 'user.textedit.cursor_position', str(pos)], _("saving state…")))
 
 def load_taskbody(text):
@@ -1103,6 +1113,7 @@ def load_task(task_file_nonprefixed, task_text):
 		if cursor_pos is not None:
 			taskbody_buffer.cursor_pos = int(cursor_pos)
 			act_taskbody_view_scroll_to_cursor()
+			RuntimeData['loaded-file-edit-position'] = cursor_pos
 
 def on_tasklist_selection_change(selection):
 	model, iterpaths = selection.get_selected_rows()
@@ -1414,8 +1425,13 @@ def on_taskbody_changed(*X):
 		RuntimeData['loaded-task-file'] = strip_path_prefix(filepath)
 	else:
 		loaded_task_file = add_path_prefix(loaded_task_file)
-		treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
-		update_task_in_list(tasklist, treeiter, task_text=text, task_mtime=time.time())
+		try:
+			treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
+		except KeyError:
+			# it has not been saved yet (async IO is being late)
+			pass
+		else:
+			update_task_in_list(tasklist, treeiter, task_text=text, task_mtime=time.time())
 		# schedule save
 		timer_once(5.0, save_task, reschedule=False)
 
@@ -1639,6 +1655,7 @@ def act_close_task():
 		# since we have auto-saving anyway.
 		save_task()
 	RuntimeData['loaded-task-file'] = None
+	RuntimeData['loaded-file-edit-position'] = None
 	RuntimeData['unsaved'] = False
 	taskbody_buffer.reinit('')
 
@@ -1655,10 +1672,11 @@ RuntimeData = {}
 AllTags = {}
 ioQueue = Queue.Queue()
 
-def on_io_work(state, data, exception=None):
+def on_io_work(state, task, exception=None):
 	gtk.threads_enter()
+	Xoper, Xparams, message = task
 	if state == 'start':
-		tasklist_top_label1.set_text(data)
+		tasklist_top_label1.set_text(message)
 	elif state == 'finish':
 		tasklist_top_label1.set_text('')
 	elif state == 'error':
@@ -1673,15 +1691,19 @@ class ioWorker(threading.Thread):
 		self._queue = queue
 		self._status_callback = status_callback
 	def run(self):
-		while self._queue:
-			oper, params, cb_data = self._queue.get()
-			self._status_callback('start', cb_data)
+		while True:
+			task = self._queue.get()
+			oper, params, cb_data = task[:]
+			if oper == 'exit':
+				self._queue.task_done()
+				break
+			self._status_callback('start', task)
 			try:
 				getattr(self, 'op_'+oper)(*params)
 			except:
-				self._status_callback('error', cb_data, sys.exc_info())
+				self._status_callback('error', task, sys.exc_info())
 			else:
-				self._status_callback('finish', cb_data)
+				self._status_callback('finish', task)
 			self._queue.task_done()
 	def op_mkdir(self, path):
 		mkdir(path)
@@ -1697,7 +1719,6 @@ class ioWorker(threading.Thread):
 
 
 ioThread = ioWorker(ioQueue, on_io_work)
-ioThread.daemon = True
 ioThread.start()
 
 
@@ -1924,5 +1945,3 @@ def do_layout(layout):
 do_layout(Props['layout/layout-set'] or '3COL')
 searchbox.grab_focus()
 gtk.main()
-sys.stderr.write(_("Waiting background threads to complete…\n"))
-ioQueue.join()
