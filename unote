@@ -27,6 +27,7 @@ import traceback
 import inotifyx
 import Queue
 import threading
+gtk.gdk.threads_init()
 
 
 APPNAME = 'unote'
@@ -776,17 +777,21 @@ def add_treeview_columns(treeview, columns):
 def main_quit():
 	act_close_task()
 	# execute outstanding timers
+	sys.stderr.write(_("Executing outstanding timed operations…")+'\n')
 	for iden in Timers.keys():
 		glib.source_remove(Timers[iden]['handle'])
 		timer_call(iden, Timers[iden]['func'], Timers[iden]['args'])
 
-	sys.stderr.write(_("Waiting background threads to complete…\n"))
 	ioQueue.put(('exit', [], None))
+	# quit gtk loop eventually
+	glib.timeout_add(100, main_quit_exit)
+
+def main_quit_exit():
+	sys.stderr.write(_("Waiting background threads to complete…")+'\n')
 	ioQueue.join()
 	ioThread.join()
-	
-	# quit gtk loop
 	gtk.main_quit()
+	return True
 
 def _(s):
 	return s
@@ -849,7 +854,7 @@ class PropertyTree(dict):
 	def _write_all(self):
 		for propname, propvalue in self.iteritems():
 			propvalue = str(propvalue)
-			if self._read(propname) != propvalue:
+			if self.savedprops.get(propname) != propvalue:
 				propfile = os.path.join(xdg.BaseDirectory.save_config_path(APPNAME), 'prop', propname)
 				ioQueue.put(('mkdir', [os.path.dirname(propfile)], _("saving config…")))
 				ioQueue.put(('write', [propfile, propvalue], _("saving config…")))
@@ -1111,7 +1116,8 @@ def load_task(task_file_nonprefixed, task_text):
 		else: raise
 	else:
 		if cursor_pos is not None:
-			taskbody_buffer.cursor_pos = int(cursor_pos)
+			cursor_pos = int(cursor_pos)
+			taskbody_buffer.cursor_pos = cursor_pos
 			act_taskbody_view_scroll_to_cursor()
 			RuntimeData['loaded-file-edit-position'] = cursor_pos
 
@@ -1675,6 +1681,7 @@ ioQueue = Queue.Queue()
 def on_io_work(state, task, exception=None):
 	gtk.threads_enter()
 	Xoper, Xparams, message = task
+	assert state in ('start', 'finish', 'error')
 	if state == 'start':
 		tasklist_top_label1.set_text(message)
 	elif state == 'finish':
