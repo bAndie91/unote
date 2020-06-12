@@ -817,6 +817,7 @@ def main_quit_exit():
 	sys.stderr.write(_("Waiting background threads to complete…")+'\n')
 	ioQueue.join()
 	ioThread.join()
+	sys.stderr.write(_("Background threads completed.")+'\n')
 	gtk.main_quit()
 	return True
 
@@ -828,6 +829,7 @@ def program_start(widget, event):
 	main_win.connect('configure-event', on_window_configure)
 	tasklist_loader.wake()
 	# load last opened task
+	# FIXME: do it during it loads the tasks or when it finished
 	select_or_load_task_by_file(Props['history/last/opened-task/path'])
 
 def select_or_load_task_by_file(task_file_nonprefixed):
@@ -1548,13 +1550,28 @@ def taskbody_view_toggle_wrap(*X):
 	taskbody_view.set_wrap_mode(getattr(gtk, wrap_mode))
 	Props['field/taskbody/wrapmode'] = wrap_mode
 
+def on_taskbody_view_click(textview, event):
+	textview.set_data('pointed-word', None)
+	x, y = textview.window_to_buffer_coords(gtk.TEXT_WINDOW_WIDGET, int(event.x), int(event.y))
+	textiter = textview.get_iter_at_location(x, y)
+	word = textview.get_buffer().get_word(textiter, word_re=taskbody_word_re)
+	textview.set_data('pointed-word', word)
+
 def on_taskbody_view_menu(Xtextview, menu):
 	pos = 0
-	if taskbody_buffer.get_has_selection():
-		mi = ActionStockMenuItem(label=_("Search"), stock_id=gtk.STOCK_FIND, action=act_search_selected_text)
+	has_selection = taskbody_buffer.get_has_selection()
+	pointed_word = taskbody_view.get_data('pointed-word')
+	if has_selection or pointed_word is not None:
+		if has_selection:
+			mi_label_suffix = ' ' + _("selected")
+		elif pointed_word is not None:
+			mi_label_suffix = ' \'%s\'' % pointed_word
+		else:
+			mi_label_suffix = ''
+		mi = ActionStockMenuItem(label=_("Search")+mi_label_suffix, stock_id=gtk.STOCK_FIND, action=act_search_text)
 		menu.insert(mi, pos)
 		pos += 1
-		mi = ActionStockMenuItem(label=_("Refine Search"), stock_id=gtk.STOCK_FIND, action=act_refine_search_with_selected_text)
+		mi = ActionStockMenuItem(label=_("Refine Search"), stock_id=gtk.STOCK_FIND, action=act_refine_search)
 		menu.insert(mi, pos)
 		pos += 1
 	if RuntimeData.get('loaded-task-file') is not None:
@@ -1574,11 +1591,15 @@ def on_taskbody_view_menu(Xtextview, menu):
 	pos += 1
 	menu.show_all()
 
-def act_search_selected_text(*X):
-	searchbox.text = taskbody_buffer.get_selected_text()
-
-def act_refine_search_with_selected_text(*X):
-	searchbox.text += ' ' + taskbody_buffer.get_selected_text()
+def get_taskbody_selected_or_pointed_text():
+	if taskbody_buffer.get_has_selection():
+		return taskbody_buffer.get_selected_text()
+	else:
+		return taskbody_view.get_data('pointed-word')
+def act_search_text(*X):
+	searchbox.text = get_taskbody_selected_or_pointed_text()
+def act_refine_search(*X):
+	searchbox.text += ' ' + get_taskbody_selected_or_pointed_text()
 
 class KeyDetector(object):
 	def __init__(self, event):
@@ -1899,6 +1920,7 @@ taskbody_buffer.connect('delete-range', on_taskbody_erase)
 taskbody_view = gtk.TextView(buffer=taskbody_buffer)
 taskbody_view_set_font(Props['field/taskbody/font'] or '')
 taskbody_view.set_wrap_mode(getattr(gtk, Props['field/taskbody/wrapmode'] or 'WRAP_WORD'))
+taskbody_view.connect('button-press-event', on_taskbody_view_click)
 taskbody_view.connect('populate-popup', on_taskbody_view_menu)
 taskbody_view.connect('key-press-event', on_taskbody_view_keypress)
 taskbody_view.connect_after('move-cursor', on_taskbody_view_cursor_moved)
@@ -2014,4 +2036,8 @@ def do_layout(layout):
 
 do_layout(Props['layout/layout-set'] or '3COL')
 searchbox.grab_focus()
-gtk.main()
+try:
+	gtk.main()
+except KeyboardInterrupt:
+	glib.timeout_add(100, main_quit, priority=glib.PRIORITY_DEFAULT_IDLE)
+	gtk.main()
