@@ -28,6 +28,7 @@ import inotifyx
 import Queue
 import threading
 gtk.gdk.threads_init()
+import urllib2
 
 
 APPNAME = 'unote'
@@ -1672,6 +1673,7 @@ def on_taskbody_view_keypress(widget, event):
 					link = taskbody_buffer.get_text_all()[start:end]
 					if link.startswith('file://'):
 						link = os.path.expanduser(link[7:])
+						link = urllib2.unquote(link)
 					run_async('xdg-open', [link])
 					return True
 			c_word = current_word(text, pos, word_re=taskbody_word_re)
