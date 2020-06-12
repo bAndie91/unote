@@ -151,6 +151,29 @@ class ScrolledWidget(gtk.ScrolledWindow):
 	def get_inner_widget(self):
 		return self.inner_widget
 
+class StatusLabel(gtk.HBox):
+	def __init__(self):
+		super(self.__class__, self).__init__()
+		self.states = []
+	def add_state(self, label):
+		self.states.append(label)
+		self.refresh()
+	def remove_state(self, label):
+		if label in self.states:
+			self.states.remove(label)
+		self.refresh()
+	def refresh(self):
+		for widget in self.get_children():
+			self.remove(widget)
+			del widget
+		n = 0
+		for label in self.states:
+			if n > 0:
+				self.pack_start(gtk.VSeparator(), expand=False, fill=False, padding=2)
+			self.pack_start(gtk.Label(label), expand=False, fill=False, padding=2)
+			n += 1
+		self.show_all()
+
 
 class Patch(object):
 	"""
@@ -514,6 +537,7 @@ class TreeModelSort(gtk.TreeModelSort):
 class TreeStore(gtk.TreeStore):
 	__gsignals__ = {
 		'changed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()),
+		'set-changed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()),
 	}
 	def __init__(self, *columns):
 		self.column = {}
@@ -535,10 +559,13 @@ class TreeStore(gtk.TreeStore):
 			self.column[col_name] = n
 			n += 1
 		super(self.__class__, self).__init__(*types)
-		for event in 'row-changed', 'row-deleted', 'row-inserted', 'rows-reordered':
-			self.connect_after(event, self._on_change, event)
-	def _on_change(self, *X):
-		self.emit('changed')
+		for event in 'row-changed', 'row-deleted', 'row-inserted':
+			self.connect_after(event, self.emit_signal, 'changed')
+			self.connect_after(event, self.emit_signal, 'set-changed')
+		self.connect_after('rows-reordered', self.emit_signal, 'changed')
+	def emit_signal(self, *args):
+		signal_name = args[-1]
+		self.emit(signal_name)
 	@staticmethod
 	def to_unicode(s):
 		if s is None: return None
@@ -799,7 +826,7 @@ def _(s):
 def program_start(widget, event):
 	widget.disconnect(start_event_handle)
 	main_win.connect('configure-event', on_window_configure)
-	load_tasklist()
+	tasklist_loader.wake()
 	# load last opened task
 	select_or_load_task_by_file(Props['history/last/opened-task/path'])
 
@@ -923,8 +950,19 @@ def getprops(*props):
 
 def on_notes_dir_changed(fd, Xcondition):
 	inotifyx.get_events(fd)
-	load_tasklist()
+	timer_once(1.0, tasklist_loader.wake, reschedule=False)
 	return True
+
+class TasklistLoader(threading.Thread):
+	def __init__(self):
+		super(self.__class__, self).__init__()
+		self._event_wake = threading.Event()
+	def wake(self):
+		self._event_wake.set()
+	def run(self):
+		while self._event_wake.wait():
+			self._event_wake.clear()
+			load_tasklist()
 
 def load_tasks():
 	for dirpath, dirnames, filenames in os.walk(os.path.expanduser(NOTES_DIR), topdown=True, onerror=None, followlinks=True):
@@ -980,23 +1018,48 @@ def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, tas
 	treestore.set(treeiter, row)
 
 def load_tasklist():
-	rows_to_forget = dict(map(lambda x: (x[1], x[0]), tasklist.walk_columns('file')))
-	for task_text, task_file in load_tasks():
-		if rows_to_forget.has_key(task_file):
-			treeiter = rows_to_forget[task_file].iter
-			del rows_to_forget[task_file]
-		else:
-			treeiter = tasklist.append(None, {})
-		update_task_in_list(tasklist, treeiter, task_text, task_file)
-	loaded_file_path = add_path_prefix(RuntimeData.get('loaded-task-file'))
-	for task_file, row in rows_to_forget.iteritems():
-		if loaded_file_path == task_file:
-			# currently opened task is gone from the overall task list, close it
-			act_close_task()
-		tasklist.remove(row.iter)
+	is_gtk_locked = False
+	try:
+		gtk.threads_enter(); is_gtk_locked = True
+		tasklist_top_label1.add_state(_("Loading notes…"))
+		rows_to_forget = dict(map(lambda x: (x[1], x[0]), tasklist.walk_columns('file')))
+		gtk.threads_leave(); is_gtk_locked = False
+		
+		for task_text, task_file in load_tasks():
+			gtk.threads_enter(); is_gtk_locked = True
+			if rows_to_forget.has_key(task_file):
+				treeiter = rows_to_forget[task_file].iter
+				del rows_to_forget[task_file]
+			else:
+				treeiter = tasklist.append(None, {})
+			update_task_in_list(tasklist, treeiter, task_text, task_file)
+			gtk.threads_leave(); is_gtk_locked = False
+		
+		loaded_file_path = add_path_prefix(RuntimeData.get('loaded-task-file'))
+		for task_file, row in rows_to_forget.iteritems():
+			gtk.threads_enter(); is_gtk_locked = True
+			if loaded_file_path != task_file:
+				tasklist.remove(row.iter)
+			gtk.threads_leave(); is_gtk_locked = False
+		for task_file, row in rows_to_forget.iteritems():
+			gtk.threads_enter(); is_gtk_locked = True
+			if loaded_file_path == task_file:
+				# currently opened task is gone from the overall task list, close it
+				act_close_task()
+				tasklist.remove(row.iter)
+			gtk.threads_leave(); is_gtk_locked = False
+	finally:
+		if not is_gtk_locked:
+			gtk.threads_enter()
+		tasklist_top_label1.remove_state(_("Loading notes…"))
+		gtk.threads_leave()
 
 def on_tasklist_changed(*X):
 	timer_once(0.25, process_tasklist)
+	on_tasklist_filtered_changed()
+
+def on_tasklist_filtered_changed():
+	tasklist_top_label2.set_text(_("Found: %d") % len(tasklist_filtered))
 
 def sort_tags_by_count(tags):
 	return sorted(tags, cmp=lambda a, b: cmp(b['count'], a['count']))
@@ -1340,7 +1403,7 @@ def tasklist_sort_callback(model, iter_a, iter_b, cb_data):
 
 def filter_tasklist():
 	tasklist_filtered.refilter()
-	tasklist_top_label2.set_text(_("Found: %d") % len(tasklist_filtered))
+	on_tasklist_filtered_changed()
 	
 	if completion_suggestions_box.get_visible():
 		query = searchbox.get_text()
@@ -1683,11 +1746,11 @@ def on_io_work(state, task, exception=None):
 	Xoper, Xparams, message = task
 	assert state in ('start', 'finish', 'error')
 	if state == 'start':
-		tasklist_top_label1.set_text(message)
+		tasklist_top_label1.add_state(message)
 	elif state == 'finish':
-		tasklist_top_label1.set_text('')
+		tasklist_top_label1.remove_state(message)
 	elif state == 'error':
-		tasklist_top_label1.set_text('')
+		tasklist_top_label1.remove_state(message)
 		traceback.print_exception(*exception)
 		display_error(exception[1])
 	gtk.threads_leave()
@@ -1727,6 +1790,9 @@ class ioWorker(threading.Thread):
 
 ioThread = ioWorker(ioQueue, on_io_work)
 ioThread.start()
+tasklist_loader = TasklistLoader()
+tasklist_loader.daemon = True
+tasklist_loader.start()
 
 
 main_win = gtk.Window()
@@ -1787,9 +1853,7 @@ inotifyx.add_watch(directory_watcher, NOTES_DIR, inotifyx.IN_CREATE | inotifyx.I
 glib.io_add_watch(directory_watcher, glib.IO_IN|glib.IO_OUT, on_notes_dir_changed)
 
 tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('updated', str), ('date', str), ('due', str))
-tasklist.connect('row-changed', on_tasklist_changed)
-tasklist.connect('row-deleted', on_tasklist_changed)
-tasklist.connect('row-inserted', on_tasklist_changed)
+tasklist.connect('set-changed', on_tasklist_changed)
 
 tasklist_filtered = tasklist.filter_new()
 tasklist_filtered.set_visible_func(tasklist_filterer)
@@ -1800,9 +1864,8 @@ for col_name in 'date', 'due':
 tasklist_sorted.set_sort_column_id(tasklist.get_column_num(Props.get('field/tasklist/sort-by', 'due')), int(Props.get('field/tasklist/sort-order', gtk.SORT_ASCENDING)))
 
 tasklist_top = gtk.HBox()
-tasklist_top_label1 = gtk.Label()
+tasklist_top_label1 = StatusLabel()
 tasklist_top_label2 = gtk.Label()
-tasklist_top_label1.set_alignment(0, 0)
 tasklist_top_label2.set_alignment(1, 0)
 
 tasklist_view = TreeView(tasklist_sorted)
