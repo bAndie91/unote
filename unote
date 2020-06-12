@@ -1561,10 +1561,10 @@ def on_taskbody_view_menu(Xtextview, menu):
 	pos = 0
 	has_selection = taskbody_buffer.get_has_selection()
 	pointed_word = taskbody_view.get_data('pointed-word')
-	if has_selection or pointed_word is not None:
+	if has_selection or pointed_word:
 		if has_selection:
 			mi_label_suffix = ' ' + _("selected")
-		elif pointed_word is not None:
+		elif pointed_word:
 			mi_label_suffix = ' \'%s\'' % pointed_word
 		else:
 			mi_label_suffix = ''
