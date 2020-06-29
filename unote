@@ -1342,6 +1342,10 @@ def load_saved_searches(savedsearches_text):
 	for treepath in to_expand:
 		savedsearches_view.expand_row(treepath, open_all=False)
 
+def act_open_files(files):
+	for filepath in files:
+		run_async('mimeopen-gui', [filepath])
+
 def on_savedsearches_menu(treeview, popup_menu, treepath, tv_col, cell_x, cell_y):
 	mi = ActionStockMenuItem(label=_("Union Search"), stock_id=gtk.STOCK_SELECT_ALL, action=savedsearches_union_search)
 	popup_menu.append(mi)
@@ -1375,6 +1379,8 @@ def on_tasklist_menu(treeview, popup_menu, c_treepath, tv_col, cell_x, cell_y):
 		for s_treepath in s_treepaths:
 			selected_filepaths.append(model[s_treepath]['file'])
 		clicked_filepath = model[c_treepath]['file']
+		selected_or_clicked_filepaths = selected_filepaths or [clicked_filepath]
+		popup_menu.append(ActionStockMenuItem(label=_("Open externally (%d)")%len(selected_or_clicked_filepaths), stock_id=gtk.STOCK_OPEN, action=lambda *X: act_open_files(selected_or_clicked_filepaths)))
 		popup_menu.append(ActionStockMenuItem(label=_("Done this"), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done([clicked_filepath])))
 		popup_menu.append(ActionStockMenuItem(label=_("Done selected (%d)")%len(selected_filepaths), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done(selected_filepaths)))
 		popup_menu.append(ActionStockMenuItem(label=_("Delete this…"), stock_id=gtk.STOCK_DELETE, action=lambda *X: act_task_delete([clicked_filepath])))
