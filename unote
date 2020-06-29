@@ -1343,14 +1343,27 @@ def load_saved_searches(savedsearches_text):
 		savedsearches_view.expand_row(treepath, open_all=False)
 
 def on_savedsearches_menu(treeview, popup_menu, treepath, tv_col, cell_x, cell_y):
+	mi = ActionStockMenuItem(label=_("Union Search"), stock_id=gtk.STOCK_SELECT_ALL, action=savedsearches_union_search)
+	popup_menu.append(mi)
+	mi = ActionStockMenuItem(label=_("Conjunct Search"), action=on_savedsearches_selection)
+	popup_menu.append(mi)
 	if treepath is not None:
 		model = treeview.get_model()
 		row = model[treepath]
 		savedquery = row['query']
-		popup_menu.append(ActionStockMenuItem(label=_("Remove '%s'")%savedquery, stock_id=gtk.STOCK_REMOVE, action=lambda Xwidget, model, row: model.remove(row.iter), action_userdata=(mode, row)))
+		mi = ActionStockMenuItem(label=_("Remove '%s'")%savedquery, stock_id=gtk.STOCK_REMOVE, \
+			action=lambda Xwidget, model, row: model.remove(row.iter), action_userdata=(model, row))
+		popup_menu.append(mi)
 
-def on_savedsearches_selection(selection):
-	model, iterpaths = selection.get_selected_rows()
+def savedsearches_union_search(*X):
+	model, iterpaths = savedsearches_selection.get_selected_rows()
+	if len(iterpaths) > 0:
+		new_query = ', '.join([model[iterpath]['query'] for iterpath in iterpaths])
+		searchbox.set_text(new_query)
+
+def on_savedsearches_selection(*X):
+	# TODO: it is buggy when one of the queries is itself a union query
+	model, iterpaths = savedsearches_selection.get_selected_rows()
 	if len(iterpaths) > 0:
 		new_query = ' '.join([model[iterpath]['query'] for iterpath in iterpaths])
 		searchbox.set_text(new_query)
