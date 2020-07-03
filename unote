@@ -984,7 +984,7 @@ def load_tasks():
 def get_tags(text):
 	return re.findall(r'(?:^|\s|,)(#[\w-]+)', text, re.I|re.U)
 
-def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, task_mtime=None):
+def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, task_mtime=None, task_btime=None):
 	row = {}
 	if task_text is not None:
 		row['raw_text'] = task_text
@@ -1016,8 +1016,14 @@ def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, tas
 		row['file'] = task_file
 		if task_mtime is None:
 			task_mtime = os.stat(task_file).st_mtime
+		if task_btime is None:
+			# with noatime mount option, atime is set on a file once when it's created,
+			# so I use it as a birth date
+			task_btime = os.stat(task_file).st_atime
 	if task_mtime is not None:
 		row['updated'] = time.strftime('%F %H:%M', time.localtime(task_mtime))
+	if task_btime is not None:
+		row['created'] = time.strftime('%F %H:%M', time.localtime(task_btime))
 	treestore.set(treeiter, row)
 
 def load_tasklist():
@@ -1894,7 +1900,7 @@ directory_watcher = inotifyx.init()
 inotifyx.add_watch(directory_watcher, NOTES_DIR, inotifyx.IN_CREATE | inotifyx.IN_DELETE | inotifyx.IN_MOVE)
 glib.io_add_watch(directory_watcher, glib.IO_IN|glib.IO_OUT, on_notes_dir_changed)
 
-tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('updated', str), ('date', str), ('due', str))
+tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('created', str), ('updated', str), ('date', str), ('due', str))
 tasklist.connect('set-changed', on_tasklist_changed)
 
 tasklist_filtered = tasklist.filter_new()
@@ -1913,12 +1919,13 @@ tasklist_top_label2.set_alignment(1, 0)
 tasklist_view = TreeView(tasklist_sorted)
 tasklist_view_columns_set = {
 	'headline_markup': [_("Task"), 'markup', tasklist.get_column_num('headline_markup')],
+	'created': [_("Created"), 'text', tasklist.get_column_num('created')],
 	'updated': [_("Updated"), 'text', tasklist.get_column_num('updated')],
 	'due': [_("Due"), 'text', tasklist.get_column_num('due')],
 	'date': [_("Date"), 'text', tasklist.get_column_num('date')],
 }
 tasklist_view_columns_display_init = []
-for col_name in (Props['layout/panel/tasklist/columns-order'] or 'headline_markup\nupdated\ndue\ndate').strip().split('\n'):
+for col_name in (Props['layout/panel/tasklist/columns-order'] or 'headline_markup\ncreated\nupdated\ndue\ndate').strip().split('\n'):
 	col = tasklist_view_columns_set[col_name][:]
 	col.insert(0, col_name)
 	tasklist_view_columns_display_init.append(col)
