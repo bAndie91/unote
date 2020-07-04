@@ -81,6 +81,12 @@ def str_replace_last(s, f, r):
 	if pos == -1: return s
 	return s[0:pos] + r + s[pos+len(f):]
 
+def nulsplit(x):
+	if x is None:
+		return []
+	else:
+		return x.split(chr(0))
+
 def run_async(cmd, args):
 	args = args[:]
 	args.insert(0, os.path.basename(cmd))
@@ -904,6 +910,9 @@ class HistoryList(object):
 		assert isinstance(bytes, int)
 		self.size_limit = bytes
 	def push(self, item):
+		if item == '':
+			# ignore empty strings
+			return
 		if item != self.currentitem:
 			self.stack.insert(self.pointer + 1, item)
 			self.pointer += 1
@@ -1209,8 +1218,7 @@ def timer_once(sec, func, func_args=(), reschedule=True):
 	iden = func.__name__
 	if Timers.has_key(iden):
 		if reschedule:
-			glib.source_remove(Timers[iden]['handle'])
-			del Timers[iden]
+			Timers[iden]['cancel']()
 		else:
 			return
 	if func is not None:
@@ -1218,7 +1226,13 @@ def timer_once(sec, func, func_args=(), reschedule=True):
 			'handle': glib.timeout_add(int(sec*1000), timer_call, iden, func, func_args),
 			'func': func,
 			'args': func_args,
+			'cancel': lambda: timer_cancel(iden),
 		}
+
+def timer_cancel(iden):
+	if iden in Timers:
+		glib.source_remove(Timers[iden]['handle'])
+		del Timers[iden]
 
 def timer_call(iden, func, args):
 	del Timers[iden]
@@ -1227,11 +1241,11 @@ def timer_call(iden, func, args):
 
 def on_searchbox_change(*X):
 	timer_once(0.4, filter_tasklist)
-	Props['field/search/text'] = searchbox.get_text()
+	Props['field/search/text'] = searchbox.text
 
 def on_searchbox_icon_clicked(entry, icon_pos, event):
 	if icon_pos == 1:
-		entry.set_text('')
+		entry.text = ''
 
 def successor_iter(model, predecessor):
 	"""return the next "heir" in line of succession metaphorically speaking.
@@ -1301,6 +1315,18 @@ def on_searchbox_keypress(widget, event):
 		tab_completion_handled = handle_tab_completion(event, complete_word)
 		if tab_completion_handled is not None:
 			return tab_completion_handled
+	if keys.enter:
+		searchboxhistory.push(searchbox.text)
+		timer_cancel('filter_tasklist')
+		filter_tasklist()
+
+def act_searchbox_prevnext(prev=True):
+	if prev:
+		text = searchboxhistory.backward()
+	else:
+		text = searchboxhistory.forward()
+	if text is not None:
+		searchbox.text = text
 
 def replace_word(text, pos, word, word_re=None):
 	first_half, second_half = get_word_halves(text, pos, word_re)
@@ -1369,14 +1395,16 @@ def savedsearches_union_search(*X):
 	model, iterpaths = savedsearches_selection.get_selected_rows()
 	if len(iterpaths) > 0:
 		new_query = ', '.join([model[iterpath]['query'] for iterpath in iterpaths])
-		searchbox.set_text(new_query)
+		searchbox.text = new_query
+		searchboxhistory.push(new_query)
 
 def on_savedsearches_selection(*X):
 	# TODO: it is buggy when one of the queries is itself a union query
 	model, iterpaths = savedsearches_selection.get_selected_rows()
 	if len(iterpaths) > 0:
 		new_query = ' '.join([model[iterpath]['query'] for iterpath in iterpaths])
-		searchbox.set_text(new_query)
+		searchbox.text = new_query
+		searchboxhistory.push(new_query)
 
 def on_tasklist_menu(treeview, popup_menu, c_treepath, tv_col, cell_x, cell_y):
 	if c_treepath is not None:
@@ -1434,7 +1462,7 @@ def filter_tasklist():
 	on_tasklist_filtered_changed()
 	
 	if completion_suggestions_box.get_visible():
-		query = searchbox.get_text()
+		query = searchbox.text
 		pos = searchbox.get_property('cursor-position')
 		# count each tags how many task would be there if we would add the suggested tag to the search filter
 		def count_tags_making_intersection(model, treepath, treeiter, completion_items):
@@ -1450,7 +1478,7 @@ def filter_tasklist():
 		completion_suggestions_box.set_items(completion_items)
 
 def tasklist_filterer(model, treeiter):
-	query = searchbox.get_text()
+	query = searchbox.text
 	query = query.strip()
 	return tasklist_filterer_with_custom_query(model, treeiter, query)
 
@@ -1629,8 +1657,10 @@ def get_taskbody_selected_or_pointed_text():
 		return taskbody_view.get_data('pointed-word')
 def act_search_text(*X):
 	searchbox.text = get_taskbody_selected_or_pointed_text()
+	searchboxhistory.push(searchbox.text)
 def act_refine_search(*X):
 	searchbox.text += ' ' + get_taskbody_selected_or_pointed_text()
+	searchboxhistory.push(searchbox.text)
 
 class KeyDetector(object):
 	def __init__(self, event):
@@ -1708,7 +1738,7 @@ def on_taskbody_view_keypress(widget, event):
 					return True
 			c_word = current_word(text, pos, word_re=taskbody_word_re)
 			if c_word.startswith('#'):
-				searchbox.set_text(searchbox.get_text() + ' ' + c_word)
+				searchbox.text = searchbox.text + ' ' + c_word
 				return True
 		elif keys.B:
 			s = taskbody_buffer.get_selected_text()
@@ -1885,7 +1915,7 @@ savedsearches_selection.set_mode(gtk.SELECTION_MULTIPLE)
 savedsearches_selection.connect('changed', on_savedsearches_selection)
 
 searchbox = TextEntry()
-searchbox.set_text(Props.get('field/search/text', ''))
+searchbox.text = Props.get('field/search/text', '')
 searchbox.set_icon_from_stock(1, gtk.STOCK_CLEAR)
 searchbox.set_tooltip_text(_("""Search expressions:\n
 peanut – tasks containing substring "peanut" even in words
@@ -1898,8 +1928,11 @@ searchbox.connect('key-press-event', on_searchbox_keypress)
 searchbox.connect('key-release-event', on_searchbox_keypressed)
 searchbox.connect('icon-release', on_searchbox_icon_clicked)
 
-taskhistorylist = HistoryList(items=((Props['history/opened-tasks'] or '').split(chr(0))), pointer=int(Props['history/opened-task-pointer'] or -1))
+taskhistorylist = HistoryList(items=nulsplit(Props['history/opened-tasks']), pointer=int(Props['history/opened-task-pointer'] or -1))
 taskhistorylist.on_change = lambda: (Props.__setitem__('history/opened-tasks', chr(0).join(taskhistorylist[:])), Props.__setitem__('history/opened-task-pointer', str(taskhistorylist.pointer)))
+
+searchboxhistory = HistoryList(items=nulsplit(Props['history/search-terms']), pointer=int(Props['history/search-terms-pointer'] or -1))
+searchboxhistory.on_change = lambda: (Props.__setitem__('history/search-terms', chr(0).join(searchboxhistory[:])), Props.__setitem__('history/search-terms-pointer', str(searchboxhistory.pointer)))
 
 directory_watcher = inotifyx.init()
 inotifyx.add_watch(directory_watcher, NOTES_DIR, inotifyx.IN_CREATE | inotifyx.IN_DELETE | inotifyx.IN_MOVE)
@@ -1968,7 +2001,9 @@ calendar.connect('mark-removed', lambda X, date: taskbody_remove_text_around_cur
 add_key_binding(main_win, '<Control>q', lambda *X: main_quit())
 add_key_binding(main_win, '<Control>f', lambda *X: searchbox.grab_focus())
 add_key_binding(main_win, '<Control>l', lambda *X: searchbox.grab_focus())
-add_key_binding(main_win, '<Control>s', lambda *X: save_search_query(searchbox.get_text()))
+add_key_binding(main_win, '<Control>s', lambda *X: save_search_query(searchbox.text))
+add_key_binding(main_win, '<Control>p', lambda *X: act_searchbox_prevnext(prev=True))
+add_key_binding(main_win, '<Control><Shift>p', lambda *X: act_searchbox_prevnext(prev=False))
 add_key_binding(main_win, '<Mod1>Up', lambda *X: act_tasklist_select_updown(up=True))
 add_key_binding(main_win, '<Mod1>Down', lambda *X: act_tasklist_select_updown(up=False))
 add_key_binding(main_win, '<Mod1>Left', lambda *X: act_tasklist_select_prevnext(prev=True))

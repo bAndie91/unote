@@ -51,16 +51,19 @@
   - Undo stack
     - limited not by steps but by memory size of steps' diff
 - Note/Task List
-  - order by Date, Due Date, or Updated Date
+  - order by Date, Due Date, Created or Updated Date
 - Search/Filter field
   - search in notes' content
     - narrow search (logical AND) : `#garden #water`
     - negation, everything after "NOT" or "!" are negative keywords: `#house #maintenance NOT #kitchen #bath` meaning "house and maintenance but not kitchen nor bath"
     - union two or more searches (logical OR) : `#garden, #house, #street`
+  - smart-case search, i.e. case-insensitive when the complete word is lower-case, otherwise search case-sensitively
   - filter as you type
+  - hit Enter to put current search term on history, recall with <kbd>Ctrl-P</kbd> and <kbd>Ctrl-Shift-P</kbd>
 - Quick Search
   - there is a list of saved search (filter) expressions
   - you can organize it in tree, change order
+  - select multiple to search notes which match all the filter expressions (Conjunct Search) or any of them (Union Search)
   - useful to organize tasks in category/project/priority by their respecting tags
 
 # Keybinding
@@ -73,6 +76,7 @@
 - <kbd>Ctrl-Shift-L</kbd> Change layout
 - <kbd>Mod1-Up</kbd>, <kbd>Mod1-Down</kbd> Open prev/next task on the list
 - <kbd>Mod1-Left</kbd>, <kbd>Mod1-Right</kbd> Open previously opened task, ie. walk back/forward in the history
+- <kbd>Ctrl-P</kbd>, <kbd>Ctrl-Shift-P</kbd> Previous/Next search term
 
 ## Editor Keybinding
 
@@ -86,6 +90,11 @@
   - Open link currently under the cursor
   - Add tag currently under the cursor to the search field
 - <kbd>Ctrl-Shift-W</kbd> Wrap text on/off
+
+# Files
+
+See editable property files in `~/.config/unote/prop`. 
+You may edit them while unote is not running.
 
 # Dependencies
 
