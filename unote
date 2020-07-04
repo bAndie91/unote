@@ -1460,6 +1460,7 @@ def tasklist_filterer_with_custom_query(model, treeiter, query):
 	task_text = model[treeiter]['raw_text']
 	query_match = False
 	if task_text is not None:
+		task_text_all_lower = task_text.lower()
 		for query_alternative in re.split(r'\s*,\s*', query):
 			query_alternative = query_alternative.strip()
 			if query_alternative == '':
@@ -1475,7 +1476,11 @@ def tasklist_filterer_with_custom_query(model, treeiter, query):
 				for query_word in re.split(r'\s+', query_clause):
 					if query_word == '':
 						continue
-					word_match = task_text.find(query_word) > -1
+					if query_word.lower() == query_word:
+						task_text_smartcase = task_text_all_lower
+					else:
+						task_text_smartcase = task_text
+					word_match = task_text_smartcase.find(query_word) > -1
 					if (positive_match and not word_match) or (not positive_match and word_match):
 						alternative_match = False
 						break
