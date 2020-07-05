@@ -809,6 +809,22 @@ class ActionStockMenuItem(gtk.ImageMenuItem):
 		if action is not None:
 			self.connect('activate', action, *action_userdata)
 
+class CheckMenuItem(gtk.CheckMenuItem):
+	def __init__(self, label=None, markup=None, use_underline=False):
+		super(self.__class__, self).__init__(label=label, use_underline=use_underline)
+		if markup is not None:
+			def find_label(w):
+				if isinstance(w, gtk.Label):
+					return w
+				if hasattr(w, 'get_children'):
+					for w in w.get_children():
+						w = find_label(w)
+						if w is not None:
+							return w
+			self.set_label('.')
+			l = find_label(self)
+			l.set_markup(markup)
+
 def save_treeview_column_sort(tvc):
 	Props['field/tasklist/sort-by'] = tvc.get_name()
 	Props['field/tasklist/sort-order'] = int(tvc.get_sort_order())
@@ -1441,9 +1457,19 @@ def on_savedsearches_selection(*X):
 def on_tasklist_header_menu(treeview, popup_menu, tvc):
 	current_colnames = [col.get_name() for col in treeview.get_columns()]
 	for col_name, col in tasklist_view_columns_set.iteritems():
-		col_title, col_attr, col_num = col[:]
-		mi = gtk.CheckMenuItem(col_title)
-		mi.set_active(col_name in current_colnames)
+		if col_name not in current_colnames:
+			col_title, col_attr, col_num = col[:]
+			mi = gtk.CheckMenuItem(col_title)
+			mi.set_active(False)
+			popup_menu.append(mi)
+	for col_name in current_colnames:
+		col_title, col_attr, col_num = tasklist_view_columns_set[col_name][:]
+		markup = glib.markup_escape_text(col_title)
+		if tvc.get_name() == col_name:
+			markup = '<b>' + markup + '</b>'
+		mi = CheckMenuItem(markup=markup)
+		mi.set_active(True)
+		mi.connect('activate', lambda col: col.hide())
 		popup_menu.append(mi)
 
 def on_tasklist_menu(treeview, popup_menu, c_treepath, tv_col, cell_x, cell_y):
