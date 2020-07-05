@@ -664,9 +664,16 @@ class TreeView(gtk.TreeView):
 			return True
 	def _on_realize(self, widget):
 		for tvc in self.get_columns():
-			if hasattr(tvc, 'setup_events'):
-				tvc.setup_events()
+			self._column_setup_events(tvc)
+	def append_column(self, tvc):
+		super(self.__class__, self).append_column(tvc)
+		self._column_setup_events(tvc)
+	def _column_setup_events(self, tvc):
+		if hasattr(tvc, 'setup_events'):
+			tvc.setup_events()
+			if not tvc.get_data('treeview-connect-done'):
 				tvc.connect('button-press-event', self._on_column_click)
+				tvc.set_data('treeview-connect-done', True)
 	def _on_column_click(self, col_widget, event):
 		if event.button == 3:
 			popup_menu = gtk.Menu()
@@ -686,12 +693,15 @@ class TreeViewColumn(gtk.TreeViewColumn):
 	
 	def setup_events(self, *X):
 		# this method should be called when the TreeView is realized.
-		# find the button representing the treeview column header
-		# and propagate up events.
-		w = self.get_widget()
-		while not isinstance(w, gtk.Button):
-			w = w.get_parent()
-		w.connect('button-press-event', lambda widget, event: self.emit('button-press-event', event))
+		if not self.get_data('setup-events-done'):
+			# find the button representing the treeview column header
+			# and propagate up events.
+			w = self.get_widget()
+			while not isinstance(w, gtk.Button):
+				w = w.get_parent()
+			if w is not None:
+				w.connect('button-press-event', lambda widget, event: self.emit('button-press-event', event))
+			self.set_data('setup-events-done', True)
 
 class Calendar(gtk.Calendar):
 	__gsignals__ = {
@@ -1467,7 +1477,6 @@ def on_tasklist_header_menu(treeview, popup_menu, tvc):
 			mi = gtk.CheckMenuItem(col_title)
 			mi.set_active(False)
 			mi.connect('activate', lambda Xmi, coldef, base_tvc: insert_treeview_column(treeview, coldef, base_tvc), [col_name, col_title, col_attr, col_num], tvc)
-			# TODO: connect signal on new col
 			popup_menu.append(mi)
 	for col_name, col in current_cols.iteritems():
 		col_title, col_attr, col_num = tasklist_view_columns_set[col_name][:]
