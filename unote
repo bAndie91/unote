@@ -641,10 +641,12 @@ class TreeStore(gtk.TreeStore):
 class TreeView(gtk.TreeView):
 	__gsignals__ = {
 		'menu-popup': (gobject.SIGNAL_RUN_LAST, gobject.TYPE_BOOLEAN, (gobject.TYPE_PYOBJECT, gobject.TYPE_PYOBJECT, gobject.TYPE_PYOBJECT, gobject.TYPE_PYOBJECT, gobject.TYPE_PYOBJECT)),
+		'header-menu-popup': (gobject.SIGNAL_RUN_LAST, gobject.TYPE_BOOLEAN, (gobject.TYPE_PYOBJECT, gobject.TYPE_PYOBJECT)),
 	}
 	def __init__(self, model):
 		super(self.__class__, self).__init__(model)
 		self.connect('button-press-event', self._on_button_click)
+		self.connect('realize', self._on_realize)
 	def _on_button_click(self, widget, event):
 		if event.button == 3:
 			x, y = int(event.x), int(event.y)
@@ -660,6 +662,36 @@ class TreeView(gtk.TreeView):
 					popup_menu.show_all()
 					popup_menu.popup(None, None, None, event.button, event.time)
 			return True
+	def _on_realize(self, widget):
+		for tvc in self.get_columns():
+			if hasattr(tvc, 'setup_events'):
+				tvc.setup_events()
+				tvc.connect('button-press-event', self._on_column_click)
+	def _on_column_click(self, col_widget, event):
+		if event.button == 3:
+			popup_menu = gtk.Menu()
+			if not self.emit('header-menu-popup', popup_menu, col_widget):
+				popup_menu.show_all()
+				popup_menu.popup(None, None, None, event.button, event.time)
+			return True
+
+class TreeViewColumn(gtk.TreeViewColumn):
+	__gsignals__ = {
+		'button-press-event': (gobject.SIGNAL_RUN_LAST, gobject.TYPE_BOOLEAN, (gobject.TYPE_PYOBJECT,)),
+	}
+	def set_title(self, title):
+		tvc_label = gtk.Label(title)
+		tvc_label.show()
+		self.set_widget(tvc_label)
+	
+	def setup_events(self, *X):
+		# this method should be called when the TreeView is realized.
+		# find the button representing the treeview column header
+		# and propagate up events.
+		w = self.get_widget()
+		while not isinstance(w, gtk.Button):
+			w = w.get_parent()
+		w.connect('button-press-event', lambda widget, event: self.emit('button-press-event', event))
 
 class Calendar(gtk.Calendar):
 	__gsignals__ = {
@@ -786,7 +818,7 @@ def save_treeview_column_width(tvc, Xprop):
 
 def add_treeview_columns(treeview, columns):
 	for col_name, col_title, col_attr, col_num in columns:
-		tvc = gtk.TreeViewColumn()
+		tvc = TreeViewColumn()
 		tvc.set_name(col_name)
 		tvc.set_title(col_title)
 		tvc.set_sort_indicator(True)
@@ -1406,6 +1438,14 @@ def on_savedsearches_selection(*X):
 		searchbox.text = new_query
 		searchboxhistory.push(new_query)
 
+def on_tasklist_header_menu(treeview, popup_menu, tvc):
+	current_colnames = [col.get_name() for col in treeview.get_columns()]
+	for col_name, col in tasklist_view_columns_set.iteritems():
+		col_title, col_attr, col_num = col[:]
+		mi = gtk.CheckMenuItem(col_title)
+		mi.set_active(col_name in current_colnames)
+		popup_menu.append(mi)
+
 def on_tasklist_menu(treeview, popup_menu, c_treepath, tv_col, cell_x, cell_y):
 	if c_treepath is not None:
 		model, s_treepaths = tasklist_selection.get_selected_rows()
@@ -1972,6 +2012,7 @@ add_treeview_columns(tasklist_view, tasklist_view_columns_display_init)
 tasklist_view.set_reorderable(True)
 tasklist_view.set_headers_clickable(True)
 tasklist_view.connect('menu-popup', on_tasklist_menu)
+tasklist_view.connect('header-menu-popup', on_tasklist_header_menu)
 tasklist_view.connect('columns-changed', lambda treeview: Props.__setitem__('layout/panel/tasklist/columns-order', '\n'.join(map(lambda tvc: tvc.get_name(), treeview.get_columns()))))
 
 tasklist_selection = tasklist_view.get_selection()
