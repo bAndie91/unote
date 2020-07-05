@@ -1454,22 +1454,30 @@ def on_savedsearches_selection(*X):
 		searchbox.text = new_query
 		searchboxhistory.push(new_query)
 
+def insert_treeview_column(treeview, coldef, base_col):
+	add_treeview_columns(treeview, [coldef])
+	tvc = treeview.get_columns()[-1]
+	treeview.move_column_after(tvc, base_col)
+
 def on_tasklist_header_menu(treeview, popup_menu, tvc):
-	current_colnames = [col.get_name() for col in treeview.get_columns()]
+	current_cols = dict([(col.get_name(), col) for col in treeview.get_columns()])
 	for col_name, col in tasklist_view_columns_set.iteritems():
-		if col_name not in current_colnames:
+		if col_name not in current_cols:
 			col_title, col_attr, col_num = col[:]
 			mi = gtk.CheckMenuItem(col_title)
 			mi.set_active(False)
+			mi.connect('activate', lambda Xmi, coldef, base_tvc: insert_treeview_column(treeview, coldef, base_tvc), [col_name, col_title, col_attr, col_num], tvc)
+			# TODO: connect signal on new col
 			popup_menu.append(mi)
-	for col_name in current_colnames:
+	for col_name, col in current_cols.iteritems():
 		col_title, col_attr, col_num = tasklist_view_columns_set[col_name][:]
 		markup = glib.markup_escape_text(col_title)
 		if tvc.get_name() == col_name:
 			markup = '<b>' + markup + '</b>'
 		mi = CheckMenuItem(markup=markup)
 		mi.set_active(True)
-		mi.connect('activate', lambda col: col.hide())
+		if len(current_cols) > 1:
+			mi.connect('activate', lambda Xmi, col: treeview.remove_column(col), col)
 		popup_menu.append(mi)
 
 def on_tasklist_menu(treeview, popup_menu, c_treepath, tv_col, cell_x, cell_y):
