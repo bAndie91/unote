@@ -1044,9 +1044,12 @@ def load_tasks():
 			if any([fnmatch(filename, pattern) for pattern in NOTESFILE_EXCLUDES]):
 				continue
 			filepath = os.path.join(dirpath, filename)
-			with open(filepath, 'r') as f:
-				text = f.read()
-				yield unicode(text), unicode(filepath)
+			try:
+				with open(filepath, 'r') as f:
+					text = f.read()
+					yield unicode(text), unicode(filepath)
+			except IOError:
+				traceback.print_exc()
 
 def get_tags(text):
 	return re.findall(r'(?:^|\s|,)(#[\w-]+)', text, re.I|re.U)
