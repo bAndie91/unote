@@ -603,13 +603,19 @@ class TreeStore(gtk.TreeStore):
 	def __getitem__(self, item):
 		answer = super(self.__class__, self).__getitem__(item)
 		return TreeModelRow(answer, self)
-	def append(self, parent, row):
+	def _row_dict_to_list(self, row):
 		if type(row) == dict:
 			cols = row
 			row = self.empty[:]
 			for col_name, value in cols.iteritems():
 				row[self.get_column_num(col_name)] = value
-		return super(self.__class__, self).append(parent, row)
+		return row
+	def append(self, parent, row):
+		return super(self.__class__, self).append(parent, self._row_dict_to_list(row))
+	def insert_after(self, parent, sibling, row):
+		return super(self.__class__, self).insert_after(parent, sibling, self._row_dict_to_list(row))
+	def insert_before(self, parent, sibling, row):
+		return super(self.__class__, self).insert_before(parent, sibling, self._row_dict_to_list(row))
 	def set(self, treeiter, *itempairs):
 		if len(itempairs) == 0: return
 		if type(itempairs[0]) == dict:
@@ -1455,6 +1461,22 @@ def load_saved_searches(savedsearches_text):
 	for treepath in to_expand:
 		savedsearches_view.expand_row(treepath, open_all=False)
 
+def on_savedsearches_dnd_data(treeview, context, x, y, selectiondata, int_id, eventtime):
+	if selectiondata.get_data_type() == 'text/plain':
+		text = selectiondata.get_text()
+		new_row = {'query': text}
+		model = treeview.get_model()
+		relative_row_path, drop_pos = treeview.get_dest_row_at_pos(x, y)
+		relative_row = model.get_iter(relative_row_path)
+		parent = model.iter_parent(relative_row)
+		if drop_pos == gtk.TREE_VIEW_DROP_BEFORE:
+			model.insert_before(parent, relative_row, new_row)
+		elif drop_pos == gtk.TREE_VIEW_DROP_AFTER:
+			model.insert_after(parent, relative_row, new_row)
+		else:
+			model.append(relative_row, new_row)
+		context.finish(success=True, del_=False, time=eventtime)
+
 def act_open_files(files):
 	for filepath in files:
 		run_async('mimeopen-gui', [filepath])
@@ -2014,6 +2036,8 @@ savedsearches_view.set_headers_clickable(True)
 savedsearches_view.connect('menu-popup', on_savedsearches_menu)
 savedsearches_view.connect('row-collapsed', on_savedsearches_changed)
 savedsearches_view.connect('row-expanded', on_savedsearches_changed)
+savedsearches_view.drag_dest_set(gtk.DEST_DEFAULT_HIGHLIGHT, [('text/plain', 0, 0), ('GTK_TREE_MODEL_ROW', 0, 1)], gtk.gdk.ACTION_COPY)
+savedsearches_view.connect('drag-data-received', on_savedsearches_dnd_data)
 setup_savedsearches_editing()
 load_saved_searches(Props['field/quicksearch/list'] or '')
 
