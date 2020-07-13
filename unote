@@ -1547,6 +1547,24 @@ def on_tasklist_menu(treeview, popup_menu, c_treepath, tv_col, cell_x, cell_y):
 		popup_menu.append(ActionStockMenuItem(label=_("Done selected (%d)")%len(selected_filepaths), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done(selected_filepaths)))
 		popup_menu.append(ActionStockMenuItem(label=_("Delete this…"), stock_id=gtk.STOCK_DELETE, action=lambda *X: act_task_delete([clicked_filepath])))
 
+def on_tasklist_dnd_drop(treeview, context, x, y, eventtime):
+	within_drop_region = True
+	return within_drop_region
+
+def on_tasklist_dnd_data(treeview, context, x, y, selectiondata, int_id, eventtime):
+	datatype = selectiondata.get_data_type()
+	if datatype == 'text/plain':
+		text = selectiondata.get_text()
+		act_new_task()
+		taskbody_buffer.set_text(text)
+		context.finish(success=True, del_=False, time=eventtime)
+	else:
+		sys.stderr.write((_("Unsupported Drag-and-Drop data type: '%s'")+'\n') % datatype)
+	# call stop_emission() to prevent the following warning:
+	# > GtkWarning: You must override the default 'drag_data_received' handler on GtkTreeView when using models that don't support the GtkTreeDragDest interface and enabling drag-and-drop.
+	treeview.stop_emission('drag_data_received')
+	return True
+
 def act_task_done(filepaths):
 	for filepath in filepaths:
 		subpath = strip_path_prefix(filepath)
@@ -2105,6 +2123,9 @@ tasklist_view.set_headers_clickable(True)
 tasklist_view.connect('menu-popup', on_tasklist_menu)
 tasklist_view.connect('header-menu-popup', on_tasklist_header_menu)
 tasklist_view.connect('columns-changed', lambda treeview: Props.__setitem__('layout/panel/tasklist/columns-order', '\n'.join(map(lambda tvc: tvc.get_name(), treeview.get_columns()))))
+tasklist_view.drag_dest_set(gtk.DEST_DEFAULT_HIGHLIGHT | gtk.DEST_DEFAULT_DROP, [('text/plain', 0, 0)], gtk.gdk.ACTION_COPY)
+tasklist_view.connect('drag-drop', on_tasklist_dnd_drop)
+tasklist_view.connect('drag-data-received', on_tasklist_dnd_data)
 
 tasklist_selection = tasklist_view.get_selection()
 tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
