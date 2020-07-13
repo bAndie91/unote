@@ -681,6 +681,14 @@ class TreeView(gtk.TreeView):
 				popup_menu.show_all()
 				popup_menu.popup(None, None, None, event.button, event.time)
 			return True
+	@staticmethod
+	class ColumnNotFoundException(Exception):
+		pass
+	def get_column_by_name(self, colname):
+		for col in self.get_columns():
+			if col.get_name() == colname:
+				return col
+		raise TreeView.ColumnNotFoundException(colname)
 
 class TreeViewColumn(gtk.TreeViewColumn):
 	__gsignals__ = {
@@ -1413,6 +1421,18 @@ def save_search_query(query):
 def on_savedsearches_changed(*X):
 	timer_once(1.0, act_save_quicksearch_list)
 
+def setup_savedsearches_editing():
+	tvc = savedsearches_view.get_column_by_name('query')
+	tvcr = tvc.get_cell_renderers()[0]
+	tvcr.set_property('editable', True)
+	tvcr.connect('edited', on_savedsearches_edit_cell, savedsearches, savedsearches.get_column_num('query'))
+
+def on_savedsearches_edit_cell(tvcr, treepath, newcontent, treeview, column_num):
+	if not newcontent:
+		return False
+	treeview[treepath][column_num] = newcontent
+	return True
+
 def act_save_quicksearch_list():
 	text = ''
 	for row, query in savedsearches.walk_columns('query'):
@@ -1994,6 +2014,7 @@ savedsearches_view.set_headers_clickable(True)
 savedsearches_view.connect('menu-popup', on_savedsearches_menu)
 savedsearches_view.connect('row-collapsed', on_savedsearches_changed)
 savedsearches_view.connect('row-expanded', on_savedsearches_changed)
+setup_savedsearches_editing()
 load_saved_searches(Props['field/quicksearch/list'] or '')
 
 savedsearches_selection = savedsearches_view.get_selection()
