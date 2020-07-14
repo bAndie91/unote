@@ -403,6 +403,10 @@ class TextBuffer(gtk.TextBuffer):
 			self.undo_stack_index += 1
 			self.undo_reference_content = replacement
 
+def textview_get_iter_from_window_widget_coordinates(textview, x, y):
+	x, y = textview.window_to_buffer_coords(gtk.TEXT_WINDOW_WIDGET, int(x), int(y))
+	return textview.get_iter_at_location(x, y)
+
 class CompletionSuggestionsBox(gtk.TextView):
 	def __init__(self, *args):
 		self._all_items = []
@@ -1565,6 +1569,22 @@ def on_tasklist_dnd_data(treeview, context, x, y, selectiondata, int_id, eventti
 	treeview.stop_emission('drag_data_received')
 	return True
 
+def on_taskbody_dnd_data(textview, context, x, y, selectiondata, int_id, eventtime):
+	datatype = selectiondata.get_data_type()
+	if datatype == 'text/uri-list':
+		uris = []
+		for uri in selectiondata.get_uris():
+			home = os.path.expanduser('~/')
+			uri = uri.replace('file://'+home, 'file://~/')
+			uris.append(uri)
+		if len(uris) == 1:
+			text = uris[0]
+		else:
+			text = '\n'.join(uris) + '\n'
+		textiter = textview_get_iter_from_window_widget_coordinates(textview, x, y)
+		taskbody_buffer.insert(textiter, text)
+		return True
+
 def act_task_done(filepaths):
 	for filepath in filepaths:
 		subpath = strip_path_prefix(filepath)
@@ -1757,8 +1777,7 @@ def taskbody_view_toggle_wrap(*X):
 
 def on_taskbody_view_click(textview, event):
 	textview.set_data('pointed-word', None)
-	x, y = textview.window_to_buffer_coords(gtk.TEXT_WINDOW_WIDGET, int(event.x), int(event.y))
-	textiter = textview.get_iter_at_location(x, y)
+	textiter = textview_get_iter_from_window_widget_coordinates(textview, event.x, event.y)
 	word = textview.get_buffer().get_word(textiter, word_re=taskbody_word_re)
 	textview.set_data('pointed-word', word)
 
@@ -2144,6 +2163,8 @@ taskbody_view.connect('populate-popup', on_taskbody_view_menu)
 taskbody_view.connect('key-press-event', on_taskbody_view_keypress)
 taskbody_view.connect_after('move-cursor', on_taskbody_view_cursor_moved)
 taskbody_view.connect('focus-in-event', on_taskbody_view_focus)
+taskbody_view.drag_dest_set(gtk.DEST_DEFAULT_HIGHLIGHT, [('text/uri-list', 0, 0), ('text/plain', 0, 1)], gtk.gdk.ACTION_LINK)
+taskbody_view.connect('drag-data-received', on_taskbody_dnd_data)
 
 completion_suggestions_box = CompletionSuggestionsBox()
 
