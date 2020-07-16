@@ -893,29 +893,53 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 	def on_get_size(self, widget, cell_area):
 		x, y, w, h = self.cr_txt.get_size(widget, cell_area)
 		return x, y, w, h
+	def get_next_column(self, current_column=None):
+		tvc = self.get_data('treeviewcolumn')
+		tv = tvc.get_tree_view()
+		columns = tv.get_columns()
+		if current_column is None:
+			current_column = tvc
+		for num, col in enumerate(columns):
+			if col is current_column:
+				if num+1 < len(columns):
+					return columns[num+1]
+				return None
+		return None
+	def draw_layout(self, window, widget, cell_area, layout):
+		base_grctx = widget.style.black_gc
+		window.draw_layout(base_grctx, cell_area.x, cell_area.y, layout)
+		return False
 	def on_render(self, window, widget, background_area, cell_area, expose_area, flags):
 #		background_area.width = background_area.width + 100
 #		cell_area.width = cell_area.width + 100
 #		expose_area.width = expose_area.width + 100
 #		print cell_area
 #		return self.cr_txt.render(window, widget, background_area, cell_area, expose_area, flags)
-
-		cell_area.width += 1000
-		cell_area.height += 1000
-
+		
 		context = widget.get_pango_context()
 		layout = pango.Layout(context)
 #		layout.set_width(cell_area.width)
 #		layout.set_wrap()
-
+		
 		markup = self.get_property('markup')
-		text = None
+		text = self.get_property('text')
 		if markup:
 			layout.set_markup(markup)
-		else:
-			text = self.get_property('text')
-			if text:
-				layout.set_text(text)
+		elif text:
+			layout.set_text(text)
+		
+		next_col = self.get_next_column()
+		next_col_content = None
+		if next_col is not None:
+			tvc = self.get_data('treeviewcolumn')
+			tv = tvc.get_tree_view()
+			treepath = tv.get_path_at_pos(cell_area.x, cell_area.y)[0]
+			model = tv.get_model()
+			next_col_content = model[treepath][next_col.get_name()]
+		if next_col is None or next_col_content:
+			self.draw_layout(window, widget, cell_area, layout)
+			return
+		
 		if markup or text:
 #			print markup or text, cell_area
 #			base_grctx = widget.style.black_gc
@@ -927,12 +951,13 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 #			c = '#%x%x%x' % (random.randint(0,15),random.randint(0,15),random.randint(0,15))
 #			gc.set_foreground(gtk.gdk.Color('#f00'))
 #			window.draw_rectangle(gc, True, cell_area.x, cell_area.y, 1000, 40)
-			def a(args):
-				window, widget, cell_area, layout = args[:]
-				base_grctx = widget.style.black_gc
-				window.draw_layout(base_grctx, cell_area.x, cell_area.y, layout)
-				return False
-			glib.timeout_add(10, a, (window, widget, cell_area, layout), priority=glib.PRIORITY_DEFAULT_IDLE)
+			glib.timeout_add(0, a, (window, widget, cell_area, layout), priority=glib.PRIORITY_HIGH_IDLE)
+			# TODO: enqueue to cell-drawer thread
+#			a((window, widget, cell_area, layout))
+#		else:
+#			pbuf = gtk.gdk.Pixbuf(gtk.gdk.COLORSPACE_RGB, False, 8, cell_area.width, cell_area.height)
+#			pbufreg = pbuf.get_from_drawable(window, window.get_colormap(), 0, 0, 0, 0, cell_area.width, cell_area.height)
+#			window.draw_pixbuf(None, pbufreg, 0, 0, 0, 0, -1, -1)
 	def on_activate(self, event, widget, path, background_area, cell_area, flags):
 		return self.cr_txt.activate(event, widget, path, background_area, cell_area, flags)
 	def on_start_editing(self, event, widget, path, background_area, cell_area, flags):
@@ -951,10 +976,7 @@ def add_treeview_columns(treeview, columns):
 		tvc.set_sizing(gtk.TREE_VIEW_COLUMN_FIXED)
 		tvc.set_reorderable(True)
 		
-		if col_name == 'headline_markup':
-			cr_txt = CellRendererTextOverflow()
-		else:
-			cr_txt = gtk.CellRendererText()
+		cr_txt = CellRendererTextOverflow()
 		cr_txt.set_data('treeviewcolumn', tvc)
 		tvc.pack_start(cr_txt, True)
 		tvc.add_attribute(cr_txt, col_attr, col_num)
