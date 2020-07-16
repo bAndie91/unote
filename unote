@@ -868,6 +868,78 @@ def save_treeview_column_sort(tvc):
 def save_treeview_column_width(tvc, Xprop):
 	Props['layout/column/%s/width' % tvc.get_name()] = tvc.get_width()
 
+class CellRendererTextOverflow(gtk.GenericCellRenderer):
+	__gproperties__ = {
+		'text': (gobject.TYPE_STRING, 'Text', 'Text', None, gobject.PARAM_READWRITE),
+		'markup': (gobject.TYPE_STRING, 'Markup', 'Markup', None, gobject.PARAM_READWRITE),
+	}
+	def __init__(self):
+		super(self.__class__, self).__init__()
+		self.__gobject_init__()
+		self.cr_txt = gtk.CellRendererText()
+		self.xprops = {'markup': None}
+	def connect(self, *args):
+		self.cr_txt.connect(*args)
+	def do_set_property(self, pspec, val):
+		if pspec.name == 'markup':
+			self.xprops[pspec.name] = val
+		self.cr_txt.set_property(pspec.name, val)
+	def do_get_property(self, pspec):
+		if pspec.name == 'markup':
+			return self.xprops[pspec.name]
+		return self.cr_txt.get_property(pspec.name)
+	def set_property(self, prop, val):
+		return self.cr_txt.set_property(prop, val)
+	def on_get_size(self, widget, cell_area):
+		x, y, w, h = self.cr_txt.get_size(widget, cell_area)
+		return x, y, w, h
+	def on_render(self, window, widget, background_area, cell_area, expose_area, flags):
+#		background_area.width = background_area.width + 100
+#		cell_area.width = cell_area.width + 100
+#		expose_area.width = expose_area.width + 100
+#		print cell_area
+#		return self.cr_txt.render(window, widget, background_area, cell_area, expose_area, flags)
+
+		cell_area.width += 1000
+		cell_area.height += 1000
+
+		context = widget.get_pango_context()
+		layout = pango.Layout(context)
+#		layout.set_width(cell_area.width)
+#		layout.set_wrap()
+
+		markup = self.get_property('markup')
+		text = None
+		if markup:
+			layout.set_markup(markup)
+		else:
+			text = self.get_property('text')
+			if text:
+				layout.set_text(text)
+		if markup or text:
+#			print markup or text, cell_area
+#			base_grctx = widget.style.black_gc
+#			window.draw_layout(base_grctx, cell_area.x, cell_area.y, layout)
+#			state = gtk.STATE_NORMAL
+#			widget.style.paint_layout(window, state, True, cell_area, widget, '', cell_area.x, cell_area.y, layout)
+#			gc = widget.style.black_gc
+#			import random
+#			c = '#%x%x%x' % (random.randint(0,15),random.randint(0,15),random.randint(0,15))
+#			gc.set_foreground(gtk.gdk.Color('#f00'))
+#			window.draw_rectangle(gc, True, cell_area.x, cell_area.y, 1000, 40)
+			def a(args):
+				window, widget, cell_area, layout = args[:]
+				base_grctx = widget.style.black_gc
+				window.draw_layout(base_grctx, cell_area.x, cell_area.y, layout)
+				return False
+			glib.timeout_add(10, a, (window, widget, cell_area, layout), priority=glib.PRIORITY_DEFAULT_IDLE)
+	def on_activate(self, event, widget, path, background_area, cell_area, flags):
+		return self.cr_txt.activate(event, widget, path, background_area, cell_area, flags)
+	def on_start_editing(self, event, widget, path, background_area, cell_area, flags):
+		return self.cr_txt.start_editing(event, widget, path, background_area, cell_area, flags)
+
+gobject.type_register(CellRendererTextOverflow)
+
 def add_treeview_columns(treeview, columns):
 	for col_name, col_title, col_attr, col_num in columns:
 		tvc = TreeViewColumn()
@@ -879,7 +951,11 @@ def add_treeview_columns(treeview, columns):
 		tvc.set_sizing(gtk.TREE_VIEW_COLUMN_FIXED)
 		tvc.set_reorderable(True)
 		
-		cr_txt = gtk.CellRendererText()
+		if col_name == 'headline_markup':
+			cr_txt = CellRendererTextOverflow()
+		else:
+			cr_txt = gtk.CellRendererText()
+		cr_txt.set_data('treeviewcolumn', tvc)
 		tvc.pack_start(cr_txt, True)
 		tvc.add_attribute(cr_txt, col_attr, col_num)
 		
