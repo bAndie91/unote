@@ -37,6 +37,10 @@ try:
 except IndexError:
 	NOTES_DIR = os.path.expanduser('~/Notes')
 NOTESFILE_EXCLUDES = ['*~', '*.bak']
+
+RE_MONTHNAMES = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
+RE_DAYSOFMONTH = r'0?[1-9]|[12][0-9]|3[01]'
+RE_DATE = r'\b([0-9]{4})-(0?[1-9]|1[0-2]|' + RE_MONTHNAMES + r')-(' + RE_DAYSOFMONTH + r')\b'
 # define what counts as a word in task texts and search query text:
 taskbody_word_re = r'[#\w-]'
 
@@ -735,12 +739,13 @@ class Calendar(gtk.Calendar):
 		self.set_display_options(self.get_display_options() | gtk.CALENDAR_WEEK_START_MONDAY)
 		# create popup menu
 		self.popup_menu = gtk.Menu()
-		mi = gtk.MenuItem("Go Today")
-		mi.connect('activate', self.gotoday)
+		mi = gtk.ImageMenuItem(stock_id=gtk.STOCK_JUMP_TO)
+		mi.set_label("Go Today")
+		mi.connect('activate', self.goto_today)
 		self.popup_menu.append(mi)
 		self.popup_menu.show_all()
 		# set initial state
-		self.gotoday()
+		self.goto_today()
 		self.connect('key-release-event', self.on_key_press_release)
 		self.connect('button-press-event', self.on_mouse_click)
 		self.connect('button-release-event', self.on_mouse_clicked)
@@ -781,12 +786,15 @@ class Calendar(gtk.Calendar):
 		elif event.keyval == gtk.gdk.keyval_from_name('Page_Down'):
 			date = datetime.strptime('%d-%d'%(c_year,c_month), '%Y-%m') + relativedelta(months=+1)
 			self.select_month(date.month - 1, date.year)
-	def gotoday(self, *X):
-		now = time.localtime()
-		self.select_month(now.tm_mon - 1, now.tm_year)
-		self.select_day(now.tm_mday)
-		self.selected_day = (now.tm_year, now.tm_mon, now.tm_mday)
+	def goto(self, y, m, d=0):
+		self.select_month(m - 1, y)
+		if d > 0:
+			self.select_day(d)
+			self.selected_day = (y, m, d)
 		self.on_paging()
+	def goto_today(self, *X):
+		now = time.localtime()
+		self.goto(now.tm_year, now.tm_mon, now.tm_mday)
 	def get_date(self):
 		y, m, d = super(self.__class__, self).get_date()
 		return y, m+1, d
@@ -1186,11 +1194,11 @@ def load_taskbody(text):
 	taskbody_buffer.reinit(text)
 	taskbody_buffer.enable_events()
 	parse_taskbody(text)
-	calendar.gotoday()
+	calendar.goto_today()
 
 def month_name_to_number(m):
 	monthabbrevations = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
-	try: m = monthabbrevations[m[0:3].lower()]
+	try: m = monthabbrevations[str(m)[0:3].lower()]
 	except KeyError: pass
 	return m
 
@@ -1247,15 +1255,14 @@ def parse_taskbody(text):
 	
 	# find date strings and show them in calendar
 	calendar_marks = []
-	re_months = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
-	for y, m, d in re.findall(r'\b([0-9]{4})-(0?[1-9]|1[0-2]|' + re_months + r')-(0?[1-9]|[12][0-9]|3[01])\b', text, re.I):
+	for y, m, d in re.findall(RE_DATE, text, re.I):
 		calendar_marks.append('%d-%d-%d' % (int(y), int(month_name_to_number(m)), int(d)))
-	for m, d in re.findall(r'\b(' + re_months + r')(?:-|\s+)(0?[1-9]|[12][0-9]|3[01])\b', text, re.I):
+	for m, d in re.findall(r'\b(' + RE_MONTHNAMES + r')(?:-|\s+)(' + RE_DAYSOFMONTH + ')\b', text, re.I):
 		calendar_marks.append('0-%d-%d' % (int(month_name_to_number(m)), int(d)))
 	calendar.set_marks(calendar_marks)
 	if calendar_marks or re.search(r'\b(date|due):', text, re.I):
 		if not calendar.get_visible():
-			calendar.gotoday()
+			calendar.goto_today()
 		calendar.show()
 	else:
 		calendar.hide()
@@ -1904,6 +1911,11 @@ def on_taskbody_view_keypress(widget, event):
 			c_word = current_word(text, pos, word_re=taskbody_word_re)
 			if c_word.startswith('#'):
 				searchbox.text = searchbox.text + ' ' + c_word
+				return True
+			c_date = re.search(RE_DATE, current_word(text, pos, word_re=r'[0-9a-z-]'), re.I)
+			if c_date:
+				y, m, d = map(int, c_date.groups())
+				calendar.goto(y, month_name_to_number(m), d)
 				return True
 		elif keys.B:
 			s = taskbody_buffer.get_selected_text()
