@@ -869,6 +869,10 @@ def save_treeview_column_width(tvc, Xprop):
 	Props['layout/column/%s/width' % tvc.get_name()] = tvc.get_width()
 
 class CellRendererTextOverflow(gtk.GenericCellRenderer):
+	"""
+	This class implements a CellRenderer which renders (markup) text just like
+	CellRendererText, but allows the text content to flow over to adjacent empty cells.
+	"""
 	__gproperties__ = {
 		'text': (gobject.TYPE_STRING, 'Text', 'Text', None, gobject.PARAM_READWRITE),
 		'markup': (gobject.TYPE_STRING, 'Markup', 'Markup', None, gobject.PARAM_READWRITE),
@@ -894,6 +898,8 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 		x, y, w, h = self.cr_txt.get_size(widget, cell_area)
 		return x, y, w, h
 	def get_next_column(self, current_column=None):
+		"""Return the column at the right side of 'current_column'
+		or, if 'current_column' is None, of the column which this CellRenderer is in."""
 		tvc = self.get_data('treeviewcolumn')
 		tv = tvc.get_tree_view()
 		columns = tv.get_columns()
@@ -911,6 +917,8 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 		window.draw_layout(base_grctx, cell_area.x, cell_area.y, layout)
 		return False
 	def on_render(self, window, widget, background_area, cell_area, expose_area, flags):
+		"""Find out how much empty area we have in width
+		by sum the width of empty cells right to the current cell."""
 		tvc = self.get_data('treeviewcolumn')
 		tv = tvc.get_tree_view()
 		model = tv.get_model()
@@ -938,11 +946,19 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 			elif text:
 				layout.set_text(text)
 			if markup or text:
+				# Create a pango layout and write the (markup) text on it, then
+				# schedule to draw it on the widget, because if we drew it right away now,
+				# then some code which we can not control would blank out the area of the empty cells
+				# clearing the overflow text.
+				# Also draw the CellRendererText as normal now. this way you'll get less fickering.
 				layout.set_width(overflow_width * pango.SCALE)
 				layout.set_wrap(pango.WRAP_CHAR)
 				layout.set_ellipsize(pango.ELLIPSIZE_END)
-				gtkOutOfLoopDrawerQueue.put((self.draw_layout, window, widget, cell_area, layout, flags))
-				return
+				xpad, ypad = self.cr_txt.get_padding()
+				draw_area = cell_area.copy()
+				draw_area.x += xpad
+				draw_area.y += ypad
+				gtkOutOfLoopDrawerQueue.put((self.draw_layout, window, widget, draw_area, layout, flags))
 		return self.cr_txt.render(window, widget, background_area, cell_area, expose_area, flags)
 	def on_activate(self, event, widget, path, background_area, cell_area, flags):
 		return self.cr_txt.activate(event, widget, path, background_area, cell_area, flags)
