@@ -914,7 +914,10 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 		tvc = self.get_data('treeviewcolumn')
 		tv = tvc.get_tree_view()
 		model = tv.get_model()
-		treepath = tv.get_path_at_pos(cell_area.x, cell_area.y)[0]
+		cellinfo = tv.get_path_at_pos(cell_area.x, cell_area.y)
+		if cellinfo is None:
+			cellinfo = tv.get_path_at_pos(cell_area.x + cell_area.width, cell_area.y + cell_area.height)
+		treepath = cellinfo[0]
 		
 		overflow_width = cell_area.width
 		next_col = self.get_next_column()
@@ -934,11 +937,12 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 				layout.set_markup(markup)
 			elif text:
 				layout.set_text(text)
-			layout.set_width(overflow_width * pango.SCALE)
-			layout.set_wrap(pango.WRAP_CHAR)
-			layout.set_ellipsize(pango.ELLIPSIZE_END)
-			glib.timeout_add(100, lambda args: self.draw_layout(*args), (window, widget, cell_area, layout, flags), priority=glib.PRIORITY_DEFAULT_IDLE)
-			return
+			if markup or text:
+				layout.set_width(overflow_width * pango.SCALE)
+				layout.set_wrap(pango.WRAP_CHAR)
+				layout.set_ellipsize(pango.ELLIPSIZE_END)
+				gtkOutOfLoopDrawerQueue.put((self.draw_layout, window, widget, cell_area, layout, flags))
+				return
 		return self.cr_txt.render(window, widget, background_area, cell_area, expose_area, flags)
 	def on_activate(self, event, widget, path, background_area, cell_area, flags):
 		return self.cr_txt.activate(event, widget, path, background_area, cell_area, flags)
@@ -1380,8 +1384,9 @@ def on_tasklist_selection_change(selection):
 		return
 	load_task(strip_path_prefix(row['file']), row['raw_text'])
 
-def timer_once(sec, func, func_args=(), reschedule=True):
-	iden = func.__name__
+def timer_once(sec, func, func_args=(), reschedule=True, iden=None):
+	if iden is None:
+		iden = func.__name__
 	if Timers.has_key(iden):
 		if reschedule:
 			Timers[iden]['cancel']()
@@ -2080,6 +2085,7 @@ Props = PropertyTree()
 RuntimeData = {}
 AllTags = {}
 ioQueue = Queue.Queue()
+gtkOutOfLoopDrawerQueue = Queue.Queue()
 
 def on_io_work(state, task, exception=None):
 	gtk.threads_enter()
@@ -2127,12 +2133,36 @@ class ioWorker(threading.Thread):
 	def op_setxattr(self, path, attrname, attrval):
 		xattr.setxattr(path, attrname, attrval)
 
+class gtkOutOfLoopDrawerWorker(threading.Thread):
+	def __init__(self, queue):
+		super(self.__class__, self).__init__()
+		self._queue = queue
+	def run(self):
+		while True:
+			tasks = []
+			while True:
+				try:
+					task = self._queue.get(block=False, timeout=1.0)
+					tasks.append(task)
+				except Queue.Empty:
+					break
+			if tasks:
+				gtk.threads_enter()
+				for task in tasks:
+					args = task[1:]
+					task[0](*args)
+					self._queue.task_done()
+				gtk.threads_leave()
+
 
 ioThread = ioWorker(ioQueue, on_io_work)
 ioThread.start()
 tasklist_loader = TasklistLoader()
 tasklist_loader.daemon = True
 tasklist_loader.start()
+gtkOutOfLoopDrawerThread = gtkOutOfLoopDrawerWorker(gtkOutOfLoopDrawerQueue)
+gtkOutOfLoopDrawerThread.daemon = True
+gtkOutOfLoopDrawerThread.start()
 
 
 main_win = gtk.Window()
