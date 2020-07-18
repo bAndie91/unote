@@ -929,7 +929,7 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 		which are found empty. Cells are identified by TreeModel path and TreeViewColumn name.
 		When an actual empty cell is encountered, then recall the saved Layout (if any) and
 		redraw it. It assumes that the controller routine requests us to
-		render the cells from left to right in sequence"""
+		render the cells from left to right in sequence and row-by-row."""
 		markup = self.get_property('markup')
 		text = self.get_property('text')
 		
@@ -941,8 +941,10 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 		if cellinfo is None:
 			cellinfo = tv.get_path_at_pos(cell_area.x + cell_area.width, cell_area.y + cell_area.height)
 		treepath = cellinfo[0]
-		if tv.get_data('layoutstash') is None:
+		
+		if tv.get_data('last-drawn-row-treepath') != treepath or tv.get_data('layoutstash') is None:
 			tv.set_data('layoutstash', {})
+		tv.set_data('last-drawn-row-treepath', treepath)
 		layoutstash = tv.get_data('layoutstash')
 		
 		overflow_width = cell_area.width
