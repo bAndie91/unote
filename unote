@@ -661,6 +661,7 @@ class TreeView(gtk.TreeView):
 		super(self.__class__, self).__init__(model)
 		self.connect('button-press-event', self._on_button_click)
 		self.connect('realize', self._on_realize)
+		self.connect('columns-changed', self._on_columns_changed)
 	def _on_button_click(self, widget, event):
 		if event.button == 3:
 			x, y = int(event.x), int(event.y)
@@ -679,6 +680,9 @@ class TreeView(gtk.TreeView):
 	def _on_realize(self, widget):
 		for tvc in self.get_columns():
 			self._column_setup_events(tvc)
+	def _on_columns_changed(self, widget):
+		# clear 'layoutstash', it is needed for CellRendererTextOverflow
+		self.set_data('layoutstash', {})
 	def append_column(self, tvc):
 		super(self.__class__, self).append_column(tvc)
 		self._column_setup_events(tvc)
@@ -967,14 +971,29 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 				draw_area = cell_area.copy()
 				draw_area.x += xpad
 				draw_area.y += ypad
-				if not layoutstash.has_key(treepath): layoutstash[treepath] = {}
+				if not layoutstash.has_key(treepath):
+					layoutstash[treepath] = {}
+				for colname in layoutstash[treepath].keys():
+					if layoutstash[treepath][colname].has_key(tvc_name):
+						del layoutstash[treepath][colname][tvc_name]
 				for colname in next_col_names:
-					layoutstash[treepath][colname] = (window, widget, draw_area, layout, flags)
+					if not layoutstash[treepath].has_key(colname):
+						layoutstash[treepath][colname] = {}
+					layoutstash[treepath][colname][tvc_name] = (window, widget, draw_area, layout, flags)
+		else:
+			# this cell's text does not flow over, so delete earlier layouts, if any
+			for colname in layoutstash.get(treepath, {}).keys():
+				if layoutstash[treepath][colname].has_key(tvc_name):
+					del layoutstash[treepath][colname][tvc_name]
+		layout_overflowcells = layoutstash.get(treepath, {}).get(tvc_name, {})
 		if not markup and not text:
-			layout_args = layoutstash.get(treepath, {}).get(tvc_name)
-			if layout_args:
+			# current cell is empty, but redraw those cells which flow over to this one
+			for layout_args in layout_overflowcells.values():
 				self.draw_layout(*layout_args)
 		else:
+			if layout_overflowcells:
+				# current cell is not empty so delete those layouts which would be drawn on it, if any
+				del layoutstash[treepath][tvc_name]
 			self.cr_txt.render(window, widget, background_area, cell_area, expose_area, flags)
 	def on_activate(self, event, widget, path, background_area, cell_area, flags):
 		return self.cr_txt.activate(event, widget, path, background_area, cell_area, flags)
