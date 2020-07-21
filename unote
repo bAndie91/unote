@@ -2071,6 +2071,9 @@ def on_taskbody_view_keypress(widget, event):
 			taskbody_buffer.undo()
 			act_taskbody_view_scroll_to_cursor()
 			return True
+	if keys.alt and keys.T:
+		taskbody_buffer.insert_at_cursor(time.strftime('%Y-%m-%d'))
+		return True
 
 def act_taskbody_view_scroll_to_cursor():
 	taskbody_view.scroll_to_mark(taskbody_buffer.get_insert(), within_margin=0.33)

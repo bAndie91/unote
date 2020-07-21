@@ -90,6 +90,7 @@
   - Open link currently under the cursor
   - Add tag currently under the cursor to the search field
 - <kbd>Ctrl-Shift-W</kbd> Wrap text on/off
+- <kbd>Mod1-T</kbd> Insert today's date
 
 # Files
 
