@@ -1696,6 +1696,13 @@ def on_tasklist_menu(treeview, popup_menu, c_treepath, tv_col, cell_x, cell_y):
 		popup_menu.append(ActionStockMenuItem(label=_("Done selected (%d)")%len(selected_filepaths), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done(selected_filepaths)))
 		popup_menu.append(ActionStockMenuItem(label=_("Delete this…"), stock_id=gtk.STOCK_DELETE, action=lambda *X: act_task_delete([clicked_filepath])))
 
+def act_open_selected_tasks(*X):
+	model, s_treepaths = tasklist_selection.get_selected_rows()
+	selected_filepaths = []
+	for s_treepath in s_treepaths:
+		selected_filepaths.append(model[s_treepath]['file'])
+	act_open_files(selected_filepaths)
+
 def on_tasklist_dnd_drop(treeview, context, x, y, eventtime):
 	within_drop_region = True
 	return within_drop_region
@@ -2339,6 +2346,7 @@ add_key_binding(main_win, '<Control>t', lambda *X: taskbody_view.grab_focus())
 add_key_binding(main_win, '<Control>n', lambda *X: act_new_task())
 add_key_binding(main_win, '<Control><Shift>l', lambda *X: do_layout(LAYOUT[(LAYOUT.index(Props['layout/layout-set'])+1)%len(LAYOUT)]))
 add_key_binding(main_win, '<Control><Shift>w', taskbody_view_toggle_wrap)
+add_key_binding(main_win, 'F4', act_open_selected_tasks)
 main_win.connect('delete-event', lambda *X: main_quit())
 
 
