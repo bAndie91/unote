@@ -107,3 +107,6 @@ You may edit them while unote is not running.
   - inotifyx (python-inotify support is on branch)
 
 See python2.7 + python3.6 multiport on 'py3' branch. It's unstable yet due to missing GTK+2.0 support.
+
+# issues
+Please submit issues via PR to some file `issue/TITLE.txt`.
