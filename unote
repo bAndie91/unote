@@ -29,6 +29,7 @@ import Queue
 import threading
 gtk.gdk.threads_init()
 import urllib2
+import unicodedata
 
 
 APPNAME = 'unote'
@@ -1800,13 +1801,17 @@ def tasklist_filterer(model, treeiter):
 	query = query.strip()
 	return tasklist_filterer_with_custom_query(model, treeiter, query)
 
+def noaccent(s):
+	return unicodedata.normalize('NFKD', s).encode('ASCII', 'ignore')
+
 def tasklist_filterer_with_custom_query(model, treeiter, query):
 	if query == '':
 		return True
 	task_text = model[treeiter]['raw_text']
 	query_match = False
 	if task_text is not None:
-		task_text_all_lower = task_text.lower()
+		task_text_noaccent = noaccent(task_text)  # FIXME: store this representation in the model
+		task_text_all_lower = task_text_noaccent.lower()
 		for query_alternative in re.split(r'\s*,\s*', query):
 			query_alternative = query_alternative.strip()
 			if query_alternative == '':
@@ -1825,8 +1830,9 @@ def tasklist_filterer_with_custom_query(model, treeiter, query):
 					if query_word.lower() == query_word:
 						task_text_smartcase = task_text_all_lower
 					else:
-						task_text_smartcase = task_text
+						task_text_smartcase = task_text_noaccent
 					word_match = task_text_smartcase.find(query_word) > -1
+					# TODO: do not match accents
 					if (positive_match and not word_match) or (not positive_match and word_match):
 						alternative_match = False
 						break
