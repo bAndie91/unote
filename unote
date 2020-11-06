@@ -2208,6 +2208,9 @@ paned1 = gtk.HPaned()
 paned2h = gtk.HPaned()
 paned2v = gtk.VPaned()
 
+main_win.set_title('μNote')
+main_win.set_icon(gtk.icon_theme_get_default().load_icon('accessories-text-editor', gtk.ICON_SIZE_SMALL_TOOLBAR, 0))
+
 try: main_win.resize(*map(int, getprops('layout/window/size/width', 'layout/window/size/height')))
 except (ValueError, TypeError): pass
 try: main_win.move(*map(int, getprops('layout/window/position/x', 'layout/window/position/y')))
