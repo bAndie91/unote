@@ -261,7 +261,7 @@ class TextEntry(gtk.Entry):
 
 class TextBuffer(gtk.TextBuffer):
 	# at least this many char addition+removal triggers an undo checkpoint:
-	undo_checkpoint_threshold = 12
+	undo_checkpoint_threshold = 32
 	undo_stack_size_limit = 2*1024*1024
 	
 	def __init__(self, *args):
@@ -274,7 +274,10 @@ class TextBuffer(gtk.TextBuffer):
 		self.create_tag('link', foreground='blue', underline=pango.UNDERLINE_SINGLE)
 		self.create_tag('hidden', invisible=True)
 		self.create_tag('alert', foreground='red')
-		self._changed_event_handle = super(self.__class__, self).connect('changed', self._undo_checkpoint)
+		self._undo_recording = True
+		self._undo_last_cursor_pos = None
+		super(self.__class__, self).connect('delete-range', self._on_delete)
+		super(self.__class__, self).connect('insert-text', self._on_insert)
 		self.reinit('')
 	def reinit(self, text=''):
 		self.set_text(text)
@@ -363,18 +366,55 @@ class TextBuffer(gtk.TextBuffer):
 		super(self.__class__, self).remove_all_tags(start, end)
 	def get_tag_by_name(self, tagname):
 		return self.get_tag_table().lookup(tagname)
+	@staticmethod
+	def _undo_helper_chardistance(a, b):
+		import difflib
+		distance = 0
+		for change in difflib.ndiff(a, b):
+			if change[0] in ['+', '-']:
+				distance += 1
+		return distance
+	def _undo_track_position(self):
+		# don't forget to call _undo_track_position exactly once per editing event (while recording undo)
+		"save the current cursor position to the last cursor position and return the previous last position"
+		cur_pos = self.cursor_pos
+		last_pos = self._undo_last_cursor_pos
+		self._undo_last_cursor_pos = self.cursor_pos
+		return last_pos
+	def _on_delete(self, *X):
+		# pass through to check whether a checkpoint is needed or not
+		self._undo_checkpoint()
+	def _on_insert(self, textbuffer, textiter, inserted_text, Xlength):
+		if self._undo_recording:
+			length = len(inserted_text.decode('utf-8'))
+			if length > 1:
+				# a text block is inserted
+				self._undo_track_position()
+				self.create_undo_checkpoint()
+				return
+			prev_char = None if self.cursor_pos == 0 else self.get_text_all()[self.cursor_pos - 1]
+			if prev_char is not None:
+				if (inserted_text == '\n') != (prev_char == '\n'):
+					# a non-consecutive Enter is hit
+					self._undo_track_position()
+					self.create_undo_checkpoint()
+					return
+			# pass through to check whether a checkpoint is needed or not
+			self._undo_checkpoint()
 	def _undo_checkpoint(self, *X):
-		def chardistance(a, b):
-			import difflib
-			distance = 0
-			for change in difflib.ndiff(a, b):
-				if change[0] in ['+', '-']:
-					distance += 1
-			return distance
-		text = self.get_text_all()
-		if chardistance(self.undo_reference_content, text) > self.undo_checkpoint_threshold:
-			self.create_undo_checkpoint()
+		if self._undo_recording:
+			last_pos = self._undo_track_position()
+			if last_pos is not None and abs(self.cursor_pos - last_pos) > 1:
+				# if the cursor position is more than 1 char away, then the text
+				# is edited elsewhere than the previous edit action
+				self.create_undo_checkpoint()
+				return
+			text = self.get_text_all()
+			if self._undo_helper_chardistance(self.undo_reference_content, text) > self.undo_checkpoint_threshold:
+				# if user typed a much then make a checkpoint
+				self.create_undo_checkpoint()
 	def create_undo_checkpoint(self):
+		# TODO: merge adjacent too small patches together
 		text = self.get_text_all()
 		patch = Patch.make_patch(self.undo_reference_content, text)
 		if patch != '':
@@ -390,10 +430,10 @@ class TextBuffer(gtk.TextBuffer):
 		if self.undo_stack_index >= 0:
 			patch, pos = self.undo_stack[self.undo_stack_index]
 			replacement = Patch.apply_patch(self.get_text_all(), patch, revert=True)
-			self.handler_block(self._changed_event_handle)
+			self._undo_recording = False
 			self.set_text(replacement)
-			self.handler_unblock(self._changed_event_handle)
 			self.cursor_pos = pos
+			self._undo_recording = True
 			self.undo_stack_index -= 1
 			self.undo_reference_content = replacement
 	def redo(self):
@@ -401,10 +441,10 @@ class TextBuffer(gtk.TextBuffer):
 		if self.undo_stack_index < len(self.undo_stack) - 1:
 			patch, pos = self.undo_stack[self.undo_stack_index + 1]
 			replacement = Patch.apply_patch(self.get_text_all(), patch, revert=False)
-			self.handler_block(self._changed_event_handle)
+			self._undo_recording = False
 			self.set_text(replacement)
-			self.handler_unblock(self._changed_event_handle)
 			self.cursor_pos = pos
+			self._undo_recording = True
 			self.undo_stack_index += 1
 			self.undo_reference_content = replacement
 
