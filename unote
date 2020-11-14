@@ -663,6 +663,12 @@ class TreeView(gtk.TreeView):
 		self.connect('button-press-event', self._on_button_click)
 		self.connect('realize', self._on_realize)
 		self.connect('columns-changed', self._on_columns_changed)
+		self.connect('key-release-event', self._on_key_release)
+	def _on_key_release(self, widget, event):
+		if event.keyval == gtk.gdk.keyval_from_name('space'):
+			iterpath, tv_col = self.get_cursor()
+			cr = tv_col.get_cell_renderers()[0]
+			cr.on_start_editing(event, widget, ','.join(map(str, iterpath)), self.get_background_area(iterpath, tv_col), self.get_cell_area(iterpath, tv_col), 0)
 	def _on_button_click(self, widget, event):
 		if event.button == 3:
 			x, y = int(event.x), int(event.y)
@@ -881,6 +887,7 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 	__gproperties__ = {
 		'text': (gobject.TYPE_STRING, 'Text', 'Text', None, gobject.PARAM_READWRITE),
 		'markup': (gobject.TYPE_STRING, 'Markup', 'Markup', None, gobject.PARAM_READWRITE),
+		'editable': (gobject.TYPE_BOOLEAN, 'Editable', 'Editable', False, gobject.PARAM_READWRITE),
 	}
 	def __init__(self):
 		super(self.__class__, self).__init__()
@@ -1001,7 +1008,26 @@ class CellRendererTextOverflow(gtk.GenericCellRenderer):
 	def on_activate(self, event, widget, path, background_area, cell_area, flags):
 		return self.cr_txt.activate(event, widget, path, background_area, cell_area, flags)
 	def on_start_editing(self, event, widget, path, background_area, cell_area, flags):
-		return self.cr_txt.start_editing(event, widget, path, background_area, cell_area, flags)
+		ce = self.cr_txt.start_editing(event, widget, path, background_area, cell_area, flags)
+		w = gtk.Window(gtk.WINDOW_TOPLEVEL)
+		w.set_keep_above(True)
+		w.set_modal(True)
+		w.set_skip_taskbar_hint(True)
+		w.set_transient_for(main_win)
+		w.set_decorated(False)
+		frame = gtk.Frame(label = "Enter new value")
+		frame.set_border_width(24)
+		frame.set_shadow_type(gtk.SHADOW_IN)
+		frame_inner = gtk.Frame()
+		frame_inner.set_border_width(16)
+		w.add(frame)
+		frame.add(frame_inner)
+		frame_inner.add(ce)
+		w.show_all()
+		add_key_binding(w, 'Escape', lambda *X: w.destroy())
+		w.connect('destroy', lambda *X: w.destroy())
+		ce.connect('remove-widget', lambda *X: w.destroy())
+		ce.start_editing(event)
 
 gobject.type_register(CellRendererTextOverflow)
 
@@ -1586,6 +1612,8 @@ def setup_savedsearches_editing():
 def on_savedsearches_edit_cell(tvcr, treepath, newcontent, treeview, column_num):
 	if not newcontent:
 		return False
+	if type(treepath) == str:
+		treepath = tuple(map(int, treepath.split(',')))
 	treeview[treepath][column_num] = newcontent
 	return True
 
@@ -2214,6 +2242,9 @@ paned1 = gtk.HPaned()
 paned2h = gtk.HPaned()
 paned2v = gtk.VPaned()
 
+main_win.set_title('μNote')
+main_win.set_icon(gtk.icon_theme_get_default().load_icon('accessories-text-editor', gtk.ICON_SIZE_SMALL_TOOLBAR, 0))
+
 try: main_win.resize(*map(int, getprops('layout/window/size/width', 'layout/window/size/height')))
 except (ValueError, TypeError): pass
 try: main_win.move(*map(int, getprops('layout/window/position/x', 'layout/window/position/y')))
@@ -2234,8 +2265,8 @@ savedsearches = TreeStore(('query', unicode))
 savedsearches.connect('changed', on_savedsearches_changed)
 savedsearches_view = TreeView(savedsearches)
 add_treeview_columns(savedsearches_view, [('query', _("Search"), 'text', savedsearches.get_column_num('query'))])
-savedsearches_view.set_reorderable(True)
-savedsearches_view.set_headers_clickable(True)
+savedsearches_view.set_reorderable(False)
+savedsearches_view.set_headers_clickable(False)
 savedsearches_view.connect('menu-popup', on_savedsearches_menu)
 savedsearches_view.connect('row-collapsed', on_savedsearches_changed)
 savedsearches_view.connect('row-expanded', on_savedsearches_changed)
