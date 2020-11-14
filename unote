@@ -1248,6 +1248,7 @@ def update_task_in_list(treestore, treeiter, task_text=None, task_file=None, tas
 	row = {}
 	if task_text is not None:
 		row['raw_text'] = task_text
+		row['noaccent_text'] = noaccent(task_text)
 		
 		preview = task_text
 		charshift = 0
@@ -1835,10 +1836,10 @@ def noaccent(s):
 def tasklist_filterer_with_custom_query(model, treeiter, query):
 	if query == '':
 		return True
-	task_text = model[treeiter]['raw_text']
+	query = noaccent(query)
+	task_text_noaccent = model[treeiter]['noaccent_text']
 	query_match = False
-	if task_text is not None:
-		task_text_noaccent = noaccent(task_text)  # FIXME: store this representation in the model
+	if task_text_noaccent is not None:
 		task_text_all_lower = task_text_noaccent.lower()
 		for query_alternative in re.split(r'\s*,\s*', query):
 			query_alternative = query_alternative.strip()
@@ -1860,7 +1861,6 @@ def tasklist_filterer_with_custom_query(model, treeiter, query):
 					else:
 						task_text_smartcase = task_text_noaccent
 					word_match = task_text_smartcase.find(query_word) > -1
-					# TODO: do not match accents
 					if (positive_match and not word_match) or (not positive_match and word_match):
 						alternative_match = False
 						break
@@ -2303,7 +2303,7 @@ directory_watcher = inotifyx.init()
 inotifyx.add_watch(directory_watcher, NOTES_DIR, inotifyx.IN_CREATE | inotifyx.IN_DELETE | inotifyx.IN_MOVE)
 glib.io_add_watch(directory_watcher, glib.IO_IN|glib.IO_OUT, on_notes_dir_changed)
 
-tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('file', unicode), ('created', str), ('updated', str), ('date', str), ('due', str))
+tasklist = TreeStore(('headline_markup', unicode), ('raw_text', unicode), ('noaccent_text', str), ('file', unicode), ('created', str), ('updated', str), ('date', str), ('due', str))
 tasklist.connect('set-changed', on_tasklist_changed)
 
 tasklist_filtered = tasklist.filter_new()
