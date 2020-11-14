@@ -1813,6 +1813,7 @@ def filter_tasklist():
 		query = searchbox.text
 		pos = searchbox.get_property('cursor-position')
 		# count each tags how many task would be there if we would add the suggested tag to the search filter
+		# TODO: it's sometimes expensive
 		def count_tags_making_intersection(model, treepath, treeiter, completion_items):
 			for item in completion_items:
 				newquery, Xpos = replace_word(query, pos, item['word'], word_re=taskbody_word_re)
@@ -1836,7 +1837,6 @@ def noaccent(s):
 def tasklist_filterer_with_custom_query(model, treeiter, query):
 	if query == '':
 		return True
-	query = noaccent(query)
 	task_text_noaccent = model[treeiter]['noaccent_text']
 	query_match = False
 	if task_text_noaccent is not None:
@@ -1856,6 +1856,13 @@ def tasklist_filterer_with_custom_query(model, treeiter, query):
 				for query_word in re.split(r'\s+', query_clause):
 					if query_word == '':
 						continue
+					if query_word == 'NOTAG':
+						notag = not bool(get_tags(task_text_noaccent))
+						if (positive_match and not notag) or (not positive_match and notag):
+							alternative_match = False
+							break
+						continue
+					query_word = noaccent(query_word)
 					if query_word.lower() == query_word:
 						task_text_smartcase = task_text_all_lower
 					else:
@@ -2287,7 +2294,9 @@ peanut – tasks containing substring "peanut" even in words
 #peanut – tasks containing a tag starting with "#peanut"
 apple pear – tasks containing both "apple" and "pear" as well
 apple, pear – all tasks containing "apple" or "pear" or both
-apple NOT pear peach – tasks containing apple but neither pear nor peach"""))
+apple NOT pear peach – tasks containing apple but neither pear nor peach
+NOTAG – tasks lacking of any tag
+NOT NOTAG - task having any tag"""))
 searchbox.connect('changed', on_searchbox_change)
 searchbox.connect('key-press-event', on_searchbox_keypress)
 searchbox.connect('key-release-event', on_searchbox_keypressed)
