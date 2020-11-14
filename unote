@@ -1856,21 +1856,41 @@ def tasklist_filterer_with_custom_query(model, treeiter, query):
 				for query_word in re.split(r'\s+', query_clause):
 					if query_word == '':
 						continue
+					
+					# report match if the task does not have any tag
 					if query_word == 'NOTAG':
 						notag = not bool(get_tags(task_text_noaccent))
 						if (positive_match and not notag) or (not positive_match and notag):
 							alternative_match = False
 							break
 						continue
-					query_word = noaccent(query_word)
-					if query_word.lower() == query_word:
-						task_text_smartcase = task_text_all_lower
+					
+					# report match if the task's directory name matches to the query word
+					spec_file = re.match(r'path:(.+)', query_word)
+					if spec_file:
+						query_word = spec_file.group(1)
+						path = os.path.dirname(strip_path_prefix(model[treeiter]['file']))
+						# match to path names always case-insensitively
+						query_word = query_word.lower()
+						path = path.lower()
+						word_match = path.find(query_word) > -1
 					else:
-						task_text_smartcase = task_text_noaccent
-					word_match = task_text_smartcase.find(query_word) > -1
+						query_word = noaccent(query_word)
+						
+						# match case-insensitively if the query word is all lowercase, and case-sensitively otherwise
+						if query_word.lower() == query_word:
+							task_text_smartcase = task_text_all_lower
+						else:
+							task_text_smartcase = task_text_noaccent
+						
+						# do the substring matching
+						word_match = task_text_smartcase.find(query_word) > -1
+					
+					# evaluate the match result
 					if (positive_match and not word_match) or (not positive_match and word_match):
 						alternative_match = False
 						break
+					
 				if not alternative_match:
 					break
 			if alternative_match:
@@ -2272,7 +2292,7 @@ savedsearches = TreeStore(('query', unicode))
 savedsearches.connect('changed', on_savedsearches_changed)
 savedsearches_view = TreeView(savedsearches)
 add_treeview_columns(savedsearches_view, [('query', _("Search"), 'text', savedsearches.get_column_num('query'))])
-savedsearches_view.set_reorderable(False)
+savedsearches_view.set_reorderable(True)
 savedsearches_view.set_headers_clickable(False)
 savedsearches_view.connect('menu-popup', on_savedsearches_menu)
 savedsearches_view.connect('row-collapsed', on_savedsearches_changed)
@@ -2289,14 +2309,15 @@ savedsearches_selection.connect('changed', on_savedsearches_selection)
 searchbox = TextEntry()
 searchbox.text = Props.get('field/search/text', '')
 searchbox.set_icon_from_stock(1, gtk.STOCK_CLEAR)
-searchbox.set_tooltip_text(_("""Search expressions:\n
-peanut – tasks containing substring "peanut" even in words
-#peanut – tasks containing a tag starting with "#peanut"
-apple pear – tasks containing both "apple" and "pear" as well
-apple, pear – all tasks containing "apple" or "pear" or both
-apple NOT pear peach – tasks containing apple but neither pear nor peach
-NOTAG – tasks lacking of any tag
-NOT NOTAG - task having any tag"""))
+searchbox.set_tooltip_markup(_("""Search expressions:\n
+<b><tt>peanut</tt></b> – tasks containing substring "peanut" even in word fragments
+<b><tt>#peanut</tt></b> – tasks containing a tag starting with "#peanut"
+<b><tt>apple pear</tt></b> – tasks containing both "apple" and "pear" as well
+<b><tt>apple, pear</tt></b> – all tasks containing "apple" or "pear" or both
+<b><tt>apple NOT pear peach</tt></b> – tasks containing apple but neither pear nor peach
+<b><tt>NOTAG</tt></b> – tasks lacking of any tag
+<b><tt>NOT NOTAG</tt></b> – task having any tag
+<b><tt>path:intake</tt></b> – tasks which are in a file on the filesystem which path matches to "intake" (ignoring μNotes base path and the file name itself)"""))
 searchbox.connect('changed', on_searchbox_change)
 searchbox.connect('key-press-event', on_searchbox_keypress)
 searchbox.connect('key-release-event', on_searchbox_keypressed)
