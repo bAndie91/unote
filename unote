@@ -33,10 +33,12 @@ import unicodedata
 
 
 APPNAME = 'unote'
+do_create_notes_dir = False
 try:
 	NOTES_DIR = sys.argv[1]
 except IndexError:
 	NOTES_DIR = os.path.expanduser('~/Notes')
+	do_create_notes_dir = True
 NOTESFILE_EXCLUDES = ['*~', '*.bak']
 
 RE_MONTHNAMES = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
@@ -2295,6 +2297,11 @@ class ioWorker(threading.Thread):
 		os.remove(path)
 	def op_setxattr(self, path, attrname, attrval):
 		xattr.setxattr(path, attrname, attrval)
+
+
+
+if do_create_notes_dir and not os.path.exists(NOTES_DIR):
+	mkdir(NOTES_DIR)
 
 
 ioThread = ioWorker(ioQueue, on_io_work)
