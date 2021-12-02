@@ -1758,6 +1758,7 @@ def on_tasklist_header_menu(treeview, popup_menu, tvc):
 		popup_menu.append(mi)
 
 def on_tasklist_menu(treeview, popup_menu, c_treepath, tv_col, cell_x, cell_y):
+	popup_menu.append(ActionStockMenuItem(label=_("New task"), stock_id=gtk.STOCK_NEW, action=lambda *X: act_new_task()))	
 	if c_treepath is not None:
 		model, s_treepaths = tasklist_selection.get_selected_rows()
 		selected_filepaths = []
@@ -1765,9 +1766,13 @@ def on_tasklist_menu(treeview, popup_menu, c_treepath, tv_col, cell_x, cell_y):
 			selected_filepaths.append(model[s_treepath]['file'])
 		clicked_filepath = model[c_treepath]['file']
 		selected_or_clicked_filepaths = selected_filepaths or [clicked_filepath]
-		popup_menu.append(ActionStockMenuItem(label=_("Open externally (%d)")%len(selected_or_clicked_filepaths), stock_id=gtk.STOCK_OPEN, action=lambda *X: act_open_files(selected_or_clicked_filepaths)))
+		popup_menu.append(gtk.SeparatorMenuItem())
+		if len(selected_or_clicked_filepaths) > 1: menuitem_label_suffix_open_externally = " (%d)" % len(selected_or_clicked_filepaths)
+		else: menuitem_label_suffix_open_externally = ''
+		popup_menu.append(ActionStockMenuItem(label=_("Open externally%s")%menuitem_label_suffix_open_externally, stock_id=gtk.STOCK_OPEN, action=lambda *X: act_open_files(selected_or_clicked_filepaths)))
 		popup_menu.append(ActionStockMenuItem(label=_("Done this"), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done([clicked_filepath])))
-		popup_menu.append(ActionStockMenuItem(label=_("Done selected (%d)")%len(selected_filepaths), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done(selected_filepaths)))
+		if len(selected_filepaths) > 1:
+			popup_menu.append(ActionStockMenuItem(label=_("Done selected (%d)")%len(selected_filepaths), stock_id=gtk.STOCK_APPLY, action=lambda *X: act_task_done(selected_filepaths)))
 		popup_menu.append(ActionStockMenuItem(label=_("Delete this…"), stock_id=gtk.STOCK_DELETE, action=lambda *X: act_task_delete([clicked_filepath])))
 
 def act_open_selected_tasks(*X):
@@ -2040,6 +2045,13 @@ def on_taskbody_view_click(textview, event):
 
 def on_taskbody_view_menu(Xtextview, menu):
 	pos = 0
+	
+	mi = ActionStockMenuItem(label=_("New task"), stock_id=gtk.STOCK_NEW, action=act_new_task)
+	menu.insert(mi, pos)
+	pos += 1
+	menu.insert(gtk.SeparatorMenuItem(), pos)
+	pos += 1
+	
 	has_selection = taskbody_buffer.get_has_selection()
 	pointed_word = taskbody_view.get_data('pointed-word')
 	if has_selection or pointed_word:
@@ -2060,14 +2072,17 @@ def on_taskbody_view_menu(Xtextview, menu):
 		mi = ActionStockMenuItem(label=_("Done this task"), stock_id=gtk.STOCK_APPLY, action=lambda Xwidget, opened_file: act_task_done([opened_file]), action_userdata=(opened_file,))
 		menu.insert(mi, pos)
 		pos += 1
+	
 	mi = ActionStockMenuItem(label=_("Default Font…"), stock_id=gtk.STOCK_SELECT_FONT, action=act_change_font)
 	menu.insert(mi, pos)
 	pos += 1
+	
 	mi = gtk.CheckMenuItem(label=_("Wrap Lines"))
 	mi.set_active(taskbody_view.get_wrap_mode() != gtk.WRAP_NONE)
 	mi.connect('toggled', taskbody_view_toggle_wrap)
 	menu.insert(mi, pos)
 	pos += 1
+	
 	menu.insert(gtk.SeparatorMenuItem(), pos)
 	pos += 1
 	menu.show_all()
