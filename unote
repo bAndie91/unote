@@ -2215,8 +2215,9 @@ def on_taskbody_view_focus(*X):
 
 def taskbody_insert_line(s):
 	pre, post = taskbody_buffer.get_buffer_halves()
-	if pre[-1] != '\n': s = '\n' + s
-	if post == '' or post[0] != '\n': s = s + '\n'
+	can_surround_chars = ['\n', ' ', '\t', ':', ',', ';']
+	if pre[-1] not in can_surround_chars: s = '\n' + s
+	if post == '' or post[0] not in can_surround_chars: s = s + '\n'
 	taskbody_buffer.insert_at_cursor(s)
 
 def taskbody_remove_text_around_cursor(s):
