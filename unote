@@ -2257,7 +2257,7 @@ def act_close_task():
 	RuntimeData['unsaved'] = False
 	taskbody_buffer.reinit('')
 
-def act_new_task():
+def act_new_task(*_X):
 	act_close_task()
 	tasklist_selection.unselect_all()
 	taskbody_view.grab_focus()
