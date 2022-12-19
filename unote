@@ -1176,7 +1176,7 @@ class PropertyTree(dict):
 		return propvalue
 	def __setitem__(self, propname, propvalue):
 		super(self.__class__, self).__setitem__(propname, propvalue)
-		timer_once(self.write_delay, self._write_all, reschedule=False)
+		timer_once(self.write_delay, self._write_all, keep_old_schedules=True)
 	def _write_all(self):
 		for propname, propvalue in self.iteritems():
 			propvalue = str(propvalue)
@@ -1252,7 +1252,7 @@ def getprops(*props):
 
 def on_notes_dir_changed(fd, Xcondition):
 	inotifyx.get_events(fd)
-	timer_once(1.0, tasklist_loader.wake, reschedule=False)
+	timer_once(1.0, tasklist_loader.wake, keep_old_schedules=True)
 	return True
 
 class TasklistLoader(threading.Thread):
@@ -1415,7 +1415,7 @@ def find_markup_positions(text, markupname):
 	def find_coderanges(text):
 		# lines between 2 set of triple backticks, and
 		# words embraced by backticks
-		# (allow to escape first backtick: r'(?<!\\)(?:\\\\)*`(.*?(?<!\\)(?:\\\\)*)`')
+		# (allow to escape first backtick with: r'(?<!\\)(?:\\\\)*`(.*?(?<!\\)(?:\\\\)*)`')
 		for regex in r'^```[^\n]*\n(.*?)(?<=\n)```', r'(?<!\w)`([^\n]*?(?<!\\)(?:\\\\)*)`(?!\w)':
 			for match in re.finditer(regex, text, re.S|re.M):
 				yield match.start(1), match.end(1), []
@@ -1502,21 +1502,22 @@ def on_tasklist_selection_change(selection):
 	if len(iterpaths) == 0:
 		return
 	iterpath = iterpaths[0]
-	# TODO: support multiple loaded task
+	# TODO: support multiple loaded tasks
 	row = model[iterpath]
 	loaded_task_file = add_path_prefix(RuntimeData.get('loaded-task-file'))
 	if loaded_task_file is not None and loaded_task_file == row['file']:
 		return
 	load_task(strip_path_prefix(row['file']), row['raw_text'])
 
-def timer_once(sec, func, func_args=(), reschedule=True, iden=None):
+def timer_once(sec, func, func_args=(), keep_old_schedules=False, iden=None):
 	if iden is None:
 		iden = func.__name__
 	if Timers.has_key(iden):
-		if reschedule:
-			Timers[iden]['cancel']()
-		else:
+		if keep_old_schedules:
 			return
+		else:
+			Timers[iden]['cancel']()
+			# TODO: older schedules are still there, only the last one is cancelled
 	if func is not None:
 		Timers[iden] = {
 			'handle': glib.timeout_add(int(sec*1000), timer_call, iden, func, func_args),
@@ -1534,6 +1535,27 @@ def timer_call(iden, func, args):
 	del Timers[iden]
 	func(*args)
 	return False
+
+def paced_action(delay, func, args=()):
+	"call 'func' at least at a rate of 1 per 'delay' seconds"
+	now = time.time()
+	fname = func.__name__
+	if fname not in Pacers:
+		Pacers[fname] = {
+			'func': func,
+			'args': args,
+		}
+	last_run = Pacers[fname].get('last_run', 0)
+	if last_run + delay < now:
+		paced_action_call(fname)
+	else:
+		Pacers[fname]['func'] = func
+		Pacers[fname]['args'] = args
+		timer_once(last_run + delay - now, paced_action_call, (fname,), iden='paced_action:'+fname)
+
+def paced_action_call(fname):
+	Pacers[fname]['func'](*Pacers[fname]['args'])
+	Pacers[fname]['last_run'] = time.time()
 
 def on_searchbox_change(*X):
 	timer_once(0.4, filter_tasklist)
@@ -1958,19 +1980,21 @@ def get_tasklist_treeiter_by_file(q_file):
 			return c_row.iter
 	raise KeyError(_("No row with file=='%s'") % q_file)
 
-def save_task():
-	filepath = add_path_prefix(RuntimeData.get('loaded-task-file'))
-	if filepath is not None:
-		treeiter = get_tasklist_treeiter_by_file(filepath)
-		text = tasklist[treeiter]['raw_text']
-		ioQueue.put(('write', [filepath, text], _("saving note…")))
+def save_file_asap(fullpath, text):
+	ioQueue.put(('write', [fullpath, text], _("saving note…")))
+	# although it probably has not touched the disk yet, but in the main thread's PoV it's considered saved,
+	# because we don't need to fire a save operation again, as the IO thread will do it eventually. at the
+	# worst case at the exit.
+	RuntimeData['unsaved'] = False
 
 def on_taskbody_changed(*X):
 	RuntimeData['unsaved'] = True
 	text = taskbody_buffer.get_text_all()
-	# re-parse
 	parse_taskbody(text)
-	# represent task text in the task list
+	auto_save_task()
+
+def auto_save_task():
+	text = taskbody_buffer.get_text_all()
 	loaded_task_file = RuntimeData.get('loaded-task-file')
 	if loaded_task_file is None:
 		# don't save new task until at least one line is entered,
@@ -1979,19 +2003,19 @@ def on_taskbody_changed(*X):
 		if not m: return
 		first_line = m.group(1)
 		filepath = find_nonexistent_file(NOTES_DIR, filenameize(first_line) + '.txt')
-		ioQueue.put(('write', [filepath, text], _("saving note…")))
 		RuntimeData['loaded-task-file'] = strip_path_prefix(filepath)
+	
+	loaded_task_file = RuntimeData.get('loaded-task-file')
+	loaded_task_file_fqp = add_path_prefix(loaded_task_file)
+	try:
+		treeiter = get_tasklist_treeiter_by_file(loaded_task_file_fqp)
+	except KeyError:
+		# new file has not been noticed yet (async IO is being slow)
+		pass
 	else:
-		loaded_task_file = add_path_prefix(loaded_task_file)
-		try:
-			treeiter = get_tasklist_treeiter_by_file(loaded_task_file)
-		except KeyError:
-			# it has not been saved yet (async IO is being late)
-			pass
-		else:
-			update_task_in_list(tasklist, treeiter, task_text=text, task_mtime=time.time())
-		# schedule save
-		timer_once(5.0, save_task, reschedule=False)
+		update_task_in_list(tasklist, treeiter, task_text=text, task_mtime=time.time())
+	# save but not too frequently
+	paced_action(5.0, save_file_asap, (loaded_task_file_fqp, text))
 
 def on_taskbody_typing(textbuffer, textiter, typedtext, length):
 	first_half, second_half = textbuffer.get_word_halves(textiter, word_re=taskbody_word_re)
@@ -2248,13 +2272,9 @@ def taskbody_remove_text_around_cursor(s):
 def act_close_task():
 	save_position()
 	if RuntimeData.get('unsaved'):
-		# save the currentlly loaded task now, and leave scheduled save_task() there, 
-		# it'll not save the task which it was called upon, but an other one - it's not a problem 
-		# since we have auto-saving anyway.
-		save_task()
+		auto_save_task()
 	RuntimeData['loaded-task-file'] = None
 	RuntimeData['loaded-file-edit-position'] = None
-	RuntimeData['unsaved'] = False
 	taskbody_buffer.reinit('')
 
 def act_new_task(*_X):
@@ -2265,6 +2285,7 @@ def act_new_task(*_X):
 
 
 Timers = {}
+Pacers = {}
 Props = PropertyTree()
 RuntimeData = {}
 AllTags = {}
