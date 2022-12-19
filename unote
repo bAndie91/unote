@@ -2283,6 +2283,31 @@ def act_new_task(*_X):
 	taskbody_view.grab_focus()
 
 
+HelpWindow = gtk.MessageDialog(None, gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_INFO, gtk.BUTTONS_OK)
+HelpWindow.set_markup("""<b>Ctrl-F</b>, <b>Ctrl-L</b> focus on search box
+<b>Ctrl-T</b> focus on the note
+<b>Ctrl-N</b> new note
+
+<b>Ctrl-S</b> save current search term in quick search list
+<b>F4</b> open selected note externally
+<b>Ctrl-Shift-W</b> toggle text wrap mode
+<b>Ctrl-Shift-L</b> change window layout
+<b>Ctrl-Q</b> quit
+
+<b>Ctrl-P</b> bring back previous search term
+<b>Ctrl-Shift-P</b> bring back next search term
+<b>Meta ↑</b> select previous note in the list
+<b>Meta ↓</b> select next note in the list
+<b>Meta ←</b> bring back previously viewed note
+<b>Meta →</b> bring back next viewed note
+""")
+HelpWindow.set_title(_("Help"))
+HelpWindow.set_modal(False)
+for sgnl in 'delete-event', 'close', 'response':
+	HelpWindow.connect(sgnl, lambda *X: (HelpWindow.hide(), True)[1])
+del sgnl
+
+
 
 Timers = {}
 Pacers = {}
@@ -2500,6 +2525,7 @@ add_key_binding(main_win, '<Control>n', lambda *X: act_new_task())
 add_key_binding(main_win, '<Control><Shift>l', lambda *X: do_layout(LAYOUT[(LAYOUT.index(Props['layout/layout-set'])+1)%len(LAYOUT)]))
 add_key_binding(main_win, '<Control><Shift>w', taskbody_view_toggle_wrap)
 add_key_binding(main_win, 'F4', act_open_selected_tasks)
+add_key_binding(main_win, 'F1', lambda *X: (HelpWindow.hide(), HelpWindow.show_all()))  # hide and show raises the window most reliably
 main_win.connect('delete-event', lambda *X: main_quit())
 
 
