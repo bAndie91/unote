@@ -1378,7 +1378,14 @@ def on_tasklist_changed(*X):
 	on_tasklist_filtered_changed()
 
 def on_tasklist_filtered_changed():
-	tasklist_top_label2.set_text(_("Found: %d") % len(tasklist_filtered))
+	tasklist_top_label2.set_text(_("Shown: %d") % len(tasklist_filtered))
+	tasklist_top_label3.set_text(_("Total: %d") % len(tasklist))
+	if len(tasklist) == len(tasklist_filtered):
+		tasklist_top_label2.hide()
+		tasklist_top_separ2.hide()
+	else:
+		tasklist_top_label2.show()
+		tasklist_top_separ2.show()
 
 def sort_tags_by_count(tags):
 	return sorted(tags, cmp=lambda a, b: cmp(b['count'], a['count']))
@@ -2472,8 +2479,13 @@ tasklist_top = gtk.HBox()
 tasklist_top_label1 = StatusLabel()
 tasklist_top_label2 = gtk.Label()
 tasklist_top_label2.set_alignment(1, 0)
+tasklist_top_separ2 = gtk.VSeparator()
+tasklist_top_label3 = gtk.Label()
+tasklist_top_label3.set_alignment(1, 0)
 tasklist_top.pack_start(tasklist_top_label1, expand=True)
 tasklist_top.pack_start(tasklist_top_label2, expand=False)
+tasklist_top.pack_start(tasklist_top_separ2, expand=False)
+tasklist_top.pack_start(tasklist_top_label3, expand=False)
 
 tasklist_view = TreeView(tasklist_sorted)
 tasklist_view_columns_set = {
