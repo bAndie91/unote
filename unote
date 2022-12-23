@@ -170,27 +170,31 @@ class MarkupText(str):
 		pass
 
 class StatusLabel(gtk.HBox):
+	from collections import OrderedDict
+	
 	def __init__(self):
 		super(self.__class__, self).__init__()
-		self.states = []
-	def add_state(self, label):
-		if label not in self.states:
-			self.states.append(label)
-			self.refresh()
-	def remove_state(self, label):
-		if label in self.states:
-			self.states.remove(label)
+		self.states = self.OrderedDict()
+	def add_state(self, identifier, label=None):
+		if label is None:
+			label = identifier
+		self.states[identifier] = label
+		self.refresh()
+	def remove_state(self, identifier):
+		if identifier in self.states.keys():
+			del self.states[identifier]
 			self.refresh()
 	def refresh(self):
 		for widget in self.get_children():
 			self.remove(widget)
 			del widget
-		for n, label in enumerate(self.states):
+		for n, identifier in enumerate(self.states):
 			if n > 0:
 				self.pack_start(gtk.VSeparator(), expand=False, fill=False, padding=2)
-			lbl = gtk.Label(label)
-			if isinstance(label, MarkupText): lbl.set_use_markup(True)
-			self.pack_start(lbl, expand=False, fill=False, padding=2)
+			label = self.states[identifier]
+			label_wdg = gtk.Label(label)
+			if isinstance(label, MarkupText): label_wdg.set_use_markup(True)
+			self.pack_start(label_wdg, expand=False, fill=False, padding=2)
 		self.show_all()
 
 
@@ -1340,7 +1344,7 @@ def load_tasklist():
 	is_gtk_locked = False
 	try:
 		gtk.threads_enter(); is_gtk_locked = True
-		tasklist_top_label1.add_state(_("Loading notes…"))
+		tasklist_top_labels_left.add_state(_("Loading notes…"))
 		rows_to_forget = dict(map(lambda x: (x[1], x[0]), tasklist.walk_columns('file')))
 		gtk.threads_leave(); is_gtk_locked = False
 		
@@ -1370,7 +1374,7 @@ def load_tasklist():
 	finally:
 		if not is_gtk_locked:
 			gtk.threads_enter()
-		tasklist_top_label1.remove_state(_("Loading notes…"))
+		tasklist_top_labels_left.remove_state(_("Loading notes…"))
 		gtk.threads_leave()
 
 def on_tasklist_changed(*X):
@@ -1378,14 +1382,12 @@ def on_tasklist_changed(*X):
 	on_tasklist_filtered_changed()
 
 def on_tasklist_filtered_changed():
-	tasklist_top_label2.set_text(_("Shown: %d") % len(tasklist_filtered))
-	tasklist_top_label3.set_text(_("Total: %d") % len(tasklist))
+	tasklist_top_labels_right.remove_state('shown')
+	tasklist_top_labels_right.remove_state('total')
+	tasklist_top_labels_right.add_state('shown', _("Shown: %d") % len(tasklist_filtered))
+	tasklist_top_labels_right.add_state('total', _("Total: %d") % len(tasklist))
 	if len(tasklist) == len(tasklist_filtered):
-		tasklist_top_label2.hide()
-		tasklist_top_separ2.hide()
-	else:
-		tasklist_top_label2.show()
-		tasklist_top_separ2.show()
+		tasklist_top_labels_right.remove_state('shown')
 
 def sort_tags_by_count(tags):
 	return sorted(tags, cmp=lambda a, b: cmp(b['count'], a['count']))
@@ -1492,9 +1494,9 @@ def task_is_unsaved(unsaved=True):
 	RuntimeData['unsaved'] = unsaved
 	lbl = MarkupText("<span variant=\"smallcaps\" weight=\"bold\">"+_("not saved")+"</span>")
 	if unsaved:
-		tasklist_top_label1.add_state(lbl)
+		tasklist_top_labels_left.add_state(lbl)
 	else:
-		tasklist_top_label1.remove_state(lbl)
+		tasklist_top_labels_left.remove_state(lbl)
 
 def load_task(task_file_nonprefixed, task_text):
 	act_close_task()
@@ -2341,11 +2343,11 @@ def on_io_work(state, task, exception=None):
 	Xoper, Xparams, message = task
 	assert state in ('start', 'finish', 'error')
 	if state == 'start':
-		tasklist_top_label1.add_state(message)
+		tasklist_top_labels_left.add_state(message)
 	elif state == 'finish':
-		tasklist_top_label1.remove_state(message)
+		tasklist_top_labels_left.remove_state(message)
 	elif state == 'error':
-		tasklist_top_label1.remove_state(message)
+		tasklist_top_labels_left.remove_state(message)
 		traceback.print_exception(*exception)
 		display_error(exception[1])
 	gtk.threads_leave()
@@ -2476,16 +2478,10 @@ for col_name in 'date', 'due':
 tasklist_sorted.set_sort_column_id(tasklist.get_column_num(Props.get('field/tasklist/sort-by', 'due')), int(Props.get('field/tasklist/sort-order', gtk.SORT_ASCENDING)))
 
 tasklist_top = gtk.HBox()
-tasklist_top_label1 = StatusLabel()
-tasklist_top_label2 = gtk.Label()
-tasklist_top_label2.set_alignment(1, 0)
-tasklist_top_separ2 = gtk.VSeparator()
-tasklist_top_label3 = gtk.Label()
-tasklist_top_label3.set_alignment(1, 0)
-tasklist_top.pack_start(tasklist_top_label1, expand=True)
-tasklist_top.pack_start(tasklist_top_label2, expand=False)
-tasklist_top.pack_start(tasklist_top_separ2, expand=False)
-tasklist_top.pack_start(tasklist_top_label3, expand=False)
+tasklist_top_labels_left = StatusLabel()
+tasklist_top_labels_right = StatusLabel()
+tasklist_top.pack_start(tasklist_top_labels_left, expand=True)
+tasklist_top.pack_start(tasklist_top_labels_right, expand=False)
 
 tasklist_view = TreeView(tasklist_sorted)
 tasklist_view_columns_set = {
