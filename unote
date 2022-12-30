@@ -45,7 +45,7 @@ RE_MONTHNAMES = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
 RE_DAYSOFMONTH = r'0?[1-9]|[12][0-9]|3[01]'
 RE_DATE = r'\b([0-9]{4})-(0?[1-9]|1[0-2]|' + RE_MONTHNAMES + r')-(' + RE_DAYSOFMONTH + r')\b'
 # define what counts as a word in task texts and search query text:
-taskbody_word_re = r'[#\w-]'
+RE_TASKBODY_WORD = r'[#\w-]'
 
 
 NOTES_DIR = NOTES_DIR.rstrip(os.path.sep)
@@ -175,15 +175,21 @@ class StatusLabel(gtk.HBox):
 	def __init__(self):
 		super(self.__class__, self).__init__()
 		self.states = self.OrderedDict()
+		self.occurrances = {}
 	def add_state(self, identifier, label=None):
 		if label is None:
 			label = identifier
 		self.states[identifier] = label
+		if identifier not in self.occurrances: self.occurrances[identifier] = 0
+		self.occurrances[identifier] += 1
 		self.refresh()
 	def remove_state(self, identifier):
-		if identifier in self.states.keys():
-			del self.states[identifier]
-			self.refresh()
+		if identifier in self.occurrances:
+			self.occurrances[identifier] -= 1
+			if self.occurrances[identifier] <= 0:
+				del self.states[identifier]
+				del self.occurrances[identifier]
+				self.refresh()
 	def refresh(self):
 		for widget in self.get_children():
 			self.remove(widget)
@@ -459,9 +465,35 @@ class TextBuffer(gtk.TextBuffer):
 			self.undo_stack_index += 1
 			self.undo_reference_content = replacement
 
-def textview_get_iter_from_window_widget_coordinates(textview, x, y):
-	x, y = textview.window_to_buffer_coords(gtk.TEXT_WINDOW_WIDGET, int(x), int(y))
-	return textview.get_iter_at_location(x, y)
+class TextView(gtk.TextView):
+	def toggle_wrap(self):
+		wrap_mode = 'WRAP_NONE' if self.get_wrap_mode() != gtk.WRAP_NONE else 'WRAP_WORD'
+		self.set_wrap_mode(getattr(gtk, wrap_mode))
+		Props['field/taskbody/wrapmode'] = wrap_mode
+	
+	@property
+	def textbuffer(self):
+		return self.get_buffer()
+	
+	def scroll_to_cursor(self):
+		self.scroll_to_mark(self.textbuffer.get_insert(), within_margin=0.33)
+	
+	def get_iter_by_window_widget_coordinates(self, x, y):
+		x, y = self.window_to_buffer_coords(gtk.TEXT_WINDOW_WIDGET, int(x), int(y))
+		return self.get_iter_at_location(x, y)
+	
+	@property
+	def font(self):
+		pctx = self.get_pango_context()
+		fdsc = pctx.get_font_description()
+		return {'name': fdsc.to_string(), 'size': int(fdsc.get_size()/pango.SCALE)}
+	
+	@font.setter
+	def font(self, fontname):
+		self.modify_font(pango.FontDescription(fontname))
+		fontsize = self.font['size']
+		head_tag = self.textbuffer.get_tag_by_name('headline')
+		head_tag.set_property('pixels-below-lines', int(fontsize * 0.8))
 
 class CompletionSuggestionsBox(gtk.TextView):
 	def __init__(self, *args):
@@ -1108,14 +1140,14 @@ def add_treeview_columns(treeview, columns):
 		tvc.connect('clicked', save_treeview_column_sort)
 
 def main_quit():
-	act_close_task()
+	act_close_current_task()
 	# execute outstanding timers
 	sys.stderr.write(_("Executing outstanding timed operations…")+'\n')
 	for iden in Timers.keys():
 		glib.source_remove(Timers[iden]['handle'])
 		timer_call(iden, Timers[iden]['func'], Timers[iden]['args'])
 
-	ioQueue.put(('exit', [], None))
+	ioQueue.put(('exit', [], None, None))
 	# quit gtk loop eventually
 	glib.timeout_add(100, main_quit_exit)
 
@@ -1128,6 +1160,7 @@ def main_quit_exit():
 	return True
 
 def _(s):
+	# TODO: integrate gettext l10n
 	return s
 
 def program_start(widget, event):
@@ -1191,8 +1224,8 @@ class PropertyTree(dict):
 			propvalue = str(propvalue)
 			if self.savedprops.get(propname) != propvalue:
 				propfile = os.path.join(xdg.BaseDirectory.save_config_path(APPNAME), 'prop', propname)
-				ioQueue.put(('mkdir', [os.path.dirname(propfile)], _("saving config…")))
-				ioQueue.put(('write', [propfile, propvalue], _("saving config…")))
+				ioQueue.put(('mkdir', [os.path.dirname(propfile)], _("saving config…"), None))
+				ioQueue.put(('write', [propfile, propvalue], _("saving config…"), None))
 				self.savedprops[propname] = propvalue
 
 class HistoryList(object):
@@ -1368,7 +1401,7 @@ def load_tasklist():
 			gtk.threads_enter(); is_gtk_locked = True
 			if loaded_file_path == task_file:
 				# currently opened task is gone from the overall task list, close it
-				act_close_task()
+				act_close_current_task()
 				tasklist.remove(row.iter)
 			gtk.threads_leave(); is_gtk_locked = False
 	finally:
@@ -1404,18 +1437,21 @@ def process_tasklist():
 	AllTags.clear()
 	tasklist.foreach(count_tags, AllTags)
 
-def save_position():
-	filepath = add_path_prefix(RuntimeData.get('loaded-task-file'))
-	saved_pos = RuntimeData.get('loaded-file-edit-position')
-	pos = taskbody_buffer.cursor_pos
-	if saved_pos != pos and filepath is not None and os.path.exists(filepath):
-		ioQueue.put(('setxattr', [filepath, 'user.textedit.cursor_position', str(pos)], _("saving state…")))
+def load_task(task_file_nonprefixed, task_text):
+	act_close_current_task()
+	task_page = notes_notebook.new_page()
+	task = task_page.usernote
+	task.source_file = task_file_nonprefixed
+	task.text = task_text
+	task.saved = True
+	task.restore_cursor_position()
+	# TODO: scroll to cursor
+	RuntimeData['loaded-task'] = task
+	
+	Props['history/last/opened-task/path'] = task_file_nonprefixed
+	taskhistorylist.push(task_file_nonprefixed)
 
 def load_taskbody(text):
-	save_position()
-	taskbody_buffer.disable_events()
-	taskbody_buffer.reinit(text)
-	taskbody_buffer.enable_events()
 	parse_taskbody(text)
 	calendar.goto_today()
 
@@ -1489,35 +1525,6 @@ def parse_taskbody(text):
 		calendar.show()
 	else:
 		calendar.hide()
-
-def task_is_unsaved(unsaved=True):
-	RuntimeData['unsaved'] = unsaved
-	lbl = MarkupText("<span variant=\"smallcaps\" weight=\"bold\">"+_("not saved")+"</span>")
-	if unsaved:
-		tasklist_top_labels_left.add_state(lbl)
-	else:
-		tasklist_top_labels_left.remove_state(lbl)
-
-def load_task(task_file_nonprefixed, task_text):
-	act_close_task()
-	load_taskbody(task_text)
-	RuntimeData['loaded-task-file'] = task_file_nonprefixed
-	task_is_unsaved(False)
-	Props['history/last/opened-task/path'] = task_file_nonprefixed
-	taskhistorylist.push(task_file_nonprefixed)
-	# restore cursor position:
-	filepath = add_path_prefix(task_file_nonprefixed)
-	try:
-		cursor_pos = xattr.getxattr(filepath, 'user.textedit.cursor_position')
-	except IOError as e:
-		if e.errno == errno.ENODATA: pass
-		else: raise
-	else:
-		if cursor_pos is not None:
-			cursor_pos = int(cursor_pos)
-			taskbody_buffer.cursor_pos = cursor_pos
-			act_taskbody_view_scroll_to_cursor()
-			RuntimeData['loaded-file-edit-position'] = cursor_pos
 
 def on_tasklist_selection_change(selection):
 	model, iterpaths = selection.get_selected_rows()
@@ -1649,7 +1656,7 @@ def on_searchbox_keypress(widget, event):
 		act_tasklist_select_updown(shift_up)
 	if completion_suggestions_box.get_visible():
 		def complete_word(word):
-			text, pos = replace_word(searchbox.get_text(), searchbox.get_property('cursor-position'), word, word_re=taskbody_word_re)
+			text, pos = replace_word(searchbox.get_text(), searchbox.get_property('cursor-position'), word, word_re=RE_TASKBODY_WORD)
 			searchbox.set_text(text)
 			searchbox.set_position(pos)
 		tab_completion_handled = handle_tab_completion(event, complete_word)
@@ -1677,7 +1684,7 @@ def replace_word(text, pos, word, word_re=None):
 def on_searchbox_keypressed(widget, event):
 	query = searchbox.get_text()
 	pos = searchbox.get_property('cursor-position')
-	c_word = current_word(query, pos, word_re=taskbody_word_re)
+	c_word = current_word(query, pos, word_re=RE_TASKBODY_WORD)
 	if c_word.startswith('#'):
 		completion_suggestions_box.show()
 		completion_suggestions_box.filter_for(c_word)
@@ -1844,36 +1851,20 @@ def on_tasklist_dnd_data(treeview, context, x, y, selectiondata, int_id, eventti
 	treeview.stop_emission('drag_data_received')
 	return True
 
-def on_taskbody_dnd_data(textview, context, x, y, selectiondata, int_id, eventtime):
-	datatype = selectiondata.get_data_type()
-	if datatype == 'text/uri-list':
-		uris = []
-		for uri in selectiondata.get_uris():
-			home = os.path.expanduser('~/')
-			uri = uri.replace('file://'+home, 'file://~/')
-			uris.append(uri)
-		if len(uris) == 1:
-			text = uris[0]
-		else:
-			text = '\n'.join(uris) + '\n'
-		textiter = textview_get_iter_from_window_widget_coordinates(textview, x, y)
-		taskbody_buffer.insert(textiter, text)
-		return True
-
 def act_task_done(filepaths):
 	for filepath in filepaths:
 		subpath = strip_path_prefix(filepath)
 		subdir, subfile = os.path.split(subpath)
 		newpath = find_nonexistent_file(os.path.join(NOTES_ARCHIVE_DIR, subdir), subfile)
-		ioQueue.put(('mkdir', [os.path.dirname(newpath)], _("saving note…")))
-		act_close_task()
-		ioQueue.put(('rename', [filepath, newpath], _("saving note…")))
+		ioQueue.put(('mkdir', [os.path.dirname(newpath)], _("saving note…"), None))
+		act_close_current_task()
+		ioQueue.put(('rename', [filepath, newpath], _("saving note…"), None))
 
 def act_task_delete(filepaths):
 	for filepath in filepaths:
 		if question(_("Really delete?")+'\n<tt>'+glib.markup_escape_text(filepath)+'</tt>', stock_yes=(None, gtk.STOCK_DELETE), stock_no=(None, gtk.STOCK_CANCEL), parent=main_win):
-			act_close_task()
-			ioQueue.put(('remove', [filepath], _("remove note…")))
+			act_close_current_task()
+			ioQueue.put(('remove', [filepath], _("remove note…"), None))
 
 def make_tasklist_sortkey(cell, order):
 	"""let the alphabetical cells always first, numeric cells second,
@@ -1909,7 +1900,7 @@ def filter_tasklist():
 		# TODO: it's sometimes expensive
 		def count_tags_making_intersection(model, treepath, treeiter, completion_items):
 			for item in completion_items:
-				newquery, Xpos = replace_word(query, pos, item['word'], word_re=taskbody_word_re)
+				newquery, Xpos = replace_word(query, pos, item['word'], word_re=RE_TASKBODY_WORD)
 				include = tasklist_filterer_with_custom_query(model, treeiter, newquery)
 				if include: item['count'] += 1
 		completion_items = list([{'word': key, 'count': 0} for key in AllTags.keys()])
@@ -2002,18 +1993,307 @@ def get_tasklist_treeiter_by_file(q_file):
 			return c_row.iter
 	raise KeyError(_("No row with file=='%s'") % q_file)
 
-def save_file_asap(fullpath, text):
-	ioQueue.put(('write', [fullpath, text], _("saving note…")))
-	# although it probably has not touched the disk yet, but in the main thread's PoV it's considered saved,
-	# because we don't need to fire a save operation again, as the IO thread will do it eventually. at the
-	# worst case at the exit.
-	task_is_unsaved(False)
+class uNotebook(gtk.Notebook):
+	def __init__(self):
+		super(self.__class__, self).__init__()
+		self.connect('page-added', self.on_pages_changed)
+		self.connect('page-removed', self.on_pages_changed)
+	
+	@property
+	def current_page_widget(self):
+		return self.get_nth_page(self.get_current_page())
+	
+	@property
+	def current_taskbody_view(self):
+		return self.current_page_widget.taskbody_view
+	
+	@property
+	def current_note(self):
+		return self.current_page_widget.usernote
+	
+	def on_pages_changed(self, *X):
+		self.set_show_tabs(self.get_n_pages() > 1)
+	
+	def new_page(self):
+		taskbody_buffer = TextBuffer()
+		taskbody_buffer.connect_after('insert-text', on_taskbody_typing)
+		taskbody_buffer.connect('delete-range', on_taskbody_erase)
+		
+		taskbody_view = TextView(buffer=taskbody_buffer)
+		taskbody_view.font = Props['field/taskbody/font'] or ''
+		taskbody_view.set_wrap_mode(getattr(gtk, Props['field/taskbody/wrapmode'] or 'WRAP_WORD'))
+		taskbody_view.connect('button-press-event', on_taskbody_view_click)
+		taskbody_view.connect('populate-popup', on_taskbody_view_menu)
+		taskbody_view.connect('key-press-event', on_taskbody_view_keypress)
+		taskbody_view.connect_after('move-cursor', on_taskbody_view_cursor_moved)
+		taskbody_view.connect('focus-in-event', on_taskbody_view_focus)
+		taskbody_view.drag_dest_set(gtk.DEST_DEFAULT_HIGHLIGHT, [('text/uri-list', 0, 0), ('text/plain', 0, 1)], gtk.gdk.ACTION_LINK)
+		taskbody_view.connect('drag-data-received', on_taskbody_dnd_data)
+		
+		page_widget = ScrolledWidget(taskbody_view)
+		page_widget.taskbody_view = taskbody_view
+		page_widget.usernote = UserNote(taskbody_buffer)
+		taskbody_view.usernote = page_widget.usernote
+		self.append_page(page_widget)
+		self.show_all()
+		return page_widget
 
-def on_taskbody_changed(*X):
-	task_is_unsaved()
-	text = taskbody_buffer.get_text_all()
-	parse_taskbody(text)
-	auto_save_task()
+def on_taskbody_typing(textbuffer, textiter, typedtext, length):
+	first_half, second_half = textbuffer.get_word_halves(textiter, word_re=RE_TASKBODY_WORD)
+	update_suggestions_by_taskbody_word(first_half + second_half, len(first_half))
+
+def on_taskbody_erase(textbuffer, startiter, enditer):
+	first_half = textbuffer.get_word_halves(startiter, word_re=RE_TASKBODY_WORD)[0]
+	second_half = textbuffer.get_word_halves(enditer, word_re=RE_TASKBODY_WORD)[1]
+	c_word = first_half+second_half
+	update_suggestions_by_taskbody_word(c_word, len(first_half))
+
+def on_taskbody_view_click(textview, event):
+	textview.set_data('pointed-word', None)
+	textiter = textview.get_iter_by_window_widget_coordinates(event.x, event.y)
+	word = textview.textbuffer.get_word(textiter, word_re=RE_TASKBODY_WORD)
+	textview.set_data('pointed-word', word)
+
+def on_taskbody_view_menu(textview, menu):
+	pos = 0
+	
+	mi = ActionStockMenuItem(label=_("New task"), stock_id=gtk.STOCK_NEW, action=act_new_task)
+	menu.insert(mi, pos)
+	pos += 1
+	menu.insert(gtk.SeparatorMenuItem(), pos)
+	pos += 1
+	
+	has_selection = textview.get_buffer().get_has_selection()
+	pointed_word = textview.get_data('pointed-word')
+	if has_selection or pointed_word:
+		if has_selection:
+			mi_label_suffix = ' ' + _("selected")
+		elif pointed_word:
+			mi_label_suffix = ' \'%s\'' % pointed_word
+		else:
+			mi_label_suffix = ''
+		mi = ActionStockMenuItem(label=_("Search")+mi_label_suffix, stock_id=gtk.STOCK_FIND, action=act_search_text)
+		mi.set_data('textview', textview)
+		menu.insert(mi, pos)
+		pos += 1
+		mi = ActionStockMenuItem(label=_("Refine Search"), stock_id=gtk.STOCK_FIND, action=act_refine_search)
+		mi.set_data('textview', textview)
+		menu.insert(mi, pos)
+		pos += 1
+	if textview.usernote.source_file is not None:
+		opened_file = add_path_prefix(textview.usernote.source_file)
+		mi = ActionStockMenuItem(label=_("Done this task"), stock_id=gtk.STOCK_APPLY, action=lambda Xwidget, opened_file: act_task_done([opened_file]), action_userdata=(opened_file,))
+		menu.insert(mi, pos)
+		pos += 1
+	
+	mi = ActionStockMenuItem(label=_("Default Font…"), stock_id=gtk.STOCK_SELECT_FONT, action=act_change_font)
+	menu.insert(mi, pos)
+	pos += 1
+	
+	mi = gtk.CheckMenuItem(label=_("Wrap Lines"))
+	mi.set_active(textview.get_wrap_mode() != gtk.WRAP_NONE)
+	mi.connect('toggled', lambda mi, textview: textview.toggle_wrap(), textview)
+	menu.insert(mi, pos)
+	pos += 1
+	
+	menu.insert(gtk.SeparatorMenuItem(), pos)
+	pos += 1
+	menu.show_all()
+
+def on_taskbody_view_keypress(textview, event):
+	keys = KeyDetector(event)
+	if completion_suggestions_box.get_visible():
+		tab_completion_handled = handle_tab_completion(event, callback = lambda word: textview.textbuffer.replace_current_word(word+' ', word_re=RE_TASKBODY_WORD))
+		if tab_completion_handled is not None:
+			return tab_completion_handled
+	
+	if keys.escape:
+		completion_suggestions_box.hide()
+		return True
+	if keys.tab or keys.backtab:
+		selected_text = textview.textbuffer.get_selected_text()
+		if selected_text != '':
+			if keys.tab:
+				selected_text = re.sub(r'^(?=.)', '\t', selected_text, flags=re.M)
+			elif keys.backtab:
+				selected_text = re.sub(r'^\t', '', selected_text, flags=re.M)
+			textview.textbuffer.replace_selected_text(selected_text)
+		else:
+			if keys.tab:
+				return False
+			elif keys.backtab:
+				line = textview.textbuffer.get_current_line()
+				if line.startswith('\t'):
+					sol, Xeol = textview.textbuffer.get_current_line_boundaries()
+					textview.textbuffer.delete(textview.textbuffer.get_iter_at_offset(sol), textview.textbuffer.get_iter_at_offset(sol+1))
+		return True
+	if keys.control:
+		if keys.enter:
+			text = textview.textbuffer.get_text_all()
+			pos = textview.textbuffer.cursor_pos
+			for start, end, Xhideranges in find_markup_positions(text, 'link'):
+				if start <= pos < end:
+					link = textview.textbuffer.get_text_all()[start:end]
+					if link.startswith('file://'):
+						link = os.path.expanduser(link[7:])
+						link = urllib2.unquote(link)
+					run_async('xdg-open', [link])
+					return True
+			c_word = current_word(text, pos, word_re=RE_TASKBODY_WORD)
+			if c_word.startswith('#'):
+				searchbox.text = searchbox.text + ' ' + c_word
+				return True
+			c_date = re.search(RE_DATE, current_word(text, pos, word_re=r'[0-9a-z-]'), re.I)
+			if c_date:
+				y, m, d = map(int, c_date.groups())
+				calendar.goto(y, month_name_to_number(m), d)
+				return True
+		elif keys.B:
+			s = textview.textbuffer.get_selected_text()
+			if s.startswith('*') and s.endswith('*') and len(s)>2:
+				s = s[1:-1]
+			else:
+				s = '*' + s + '*'
+			textview.textbuffer.replace_selected_text(s)
+			return True
+		elif keys.Y or (keys.Z and keys.shift):
+			textview.textbuffer.redo()
+			textview.scroll_to_cursor()
+			return True
+		elif keys.Z:
+			textview.textbuffer.undo()
+			textview.scroll_to_cursor()
+			return True
+	if keys.alt and keys.T:
+		textview.textbuffer.insert_at_cursor(time.strftime('%Y-%m-%d'))
+		return True
+
+def on_taskbody_view_cursor_moved(textview, Xstep_size, Xcount, Xextend_selection):
+	first_half, second_half = textview.textbuffer.get_word_halves(textview.textbuffer.cursor_iter, word_re=RE_TASKBODY_WORD)
+	update_suggestions_by_taskbody_word(first_half + second_half, len(first_half))
+
+def on_taskbody_view_focus(*X):
+	completion_items = make_tag_suggestion_list(AllTags)
+	completion_suggestions_box.set_items(completion_items)
+
+def on_taskbody_dnd_data(textview, context, x, y, selectiondata, int_id, eventtime):
+	datatype = selectiondata.get_data_type()
+	if datatype == 'text/uri-list':
+		uris = []
+		for uri in selectiondata.get_uris():
+			home = os.path.expanduser('~/')
+			uri = uri.replace('file://'+home, 'file://~/')
+			uris.append(uri)
+		if len(uris) == 1:
+			text = uris[0]
+		else:
+			text = '\n'.join(uris) + '\n'
+		textiter = textview.get_iter_by_window_widget_coordinates(x, y)
+		textview.textbuffer.insert(textiter, text)
+		return True
+
+
+class UserNote(gobject.GObject):
+	xattr_cursor_position = 'user.textedit.cursor_position'
+	
+	def __init__(self, textbuffer):
+		super(self.__class__, self).__init__()
+		self.source_file = None
+		self.saved = None
+		self.sighandler = {}
+		self.textbuffer = textbuffer
+		self.saved_cursor_position = None
+	
+	@property
+	def textbuffer(self):
+		return self._textbuffer
+	
+	@textbuffer.setter
+	def textbuffer(self, textbuffer):
+		if textbuffer is not None:
+			# bound to the TextBuffer UI element
+			self.sighandler['changed'] = textbuffer.connect('changed', self.on_text_changed)
+		else:
+			# unbound from the TextBuffer UI element
+			for sig in self.sighandler:
+				self._textbuffer.disconnect(self.sighandler[sig])
+				del self.sighandler[sig]
+		self._textbuffer = textbuffer
+	
+	def on_text_changed(self, *X):
+		self.saved = False
+		parse_taskbody(self.text)
+		self.auto_save()
+	
+	@property
+	def text(self):
+		if self.textbuffer is not None:
+			return self.textbuffer.get_text_all()
+		else:
+			return self._text
+	
+	@text.setter
+	def text(self, text):
+		if self.textbuffer is not None:
+			self.textbuffer.disable_events()
+			self.textbuffer.reinit(text)
+			self.textbuffer.enable_events()
+		else:
+			raise Exception("can not set task's text when not bound to a TextBuffer")
+	
+	@property
+	def saved(self):
+		return self._saved
+	
+	@saved.setter
+	def saved(self, is_saved):
+		self._saved = is_saved
+		if is_saved:
+			tasklist_top_labels_left.remove_state('unsaved-indicator')
+		else:
+			tasklist_top_labels_left.add_state('unsaved-indicator', MarkupText("<span variant=\"smallcaps\" weight=\"bold\">"+_("not saved")+"</span>"))
+		# TODO: put indicator on tab label
+	
+	def save_cursor_position(self):
+		filepath = add_path_prefix(self.source_file)
+		pos = self.textbuffer.cursor_pos
+		if self.saved_cursor_position != pos and filepath is not None and os.path.exists(filepath):
+			ioQueue.put(('setxattr', [filepath, self.xattr_cursor_position, str(pos)], _("saving state…"), None))
+	
+	def restore_cursor_position(self):
+		filepath = add_path_prefix(self.source_file)
+		try:
+			cursor_pos = xattr.getxattr(filepath, self.xattr_cursor_position)
+		except IOError as e:
+			if e.errno == errno.ENODATA: pass
+			else: raise
+		else:
+			if cursor_pos is not None:
+				cursor_pos = int(cursor_pos)
+				self.saved_cursor_position = cursor_pos
+				self.textbuffer.cursor_pos = cursor_pos
+	
+	def dismiss(self):
+		self.save_cursor_position()
+		self._text = self.text
+		self.text = ''
+		self.textbuffer = None
+		# TODO: last save
+	
+	def auto_save(self):
+		# TODO
+		# TODO: re-open note if delayed save failed
+		pass
+
+def save_file_asap(fullpath, text):
+	ioQueue.put(('write', [fullpath, text], _("saving note…"), cb_save_file_asap))
+
+def cb_save_file_asap(stage, io_task, exception=None):
+	if stage == BGTASK_STATE_FINISH:
+		task_is_unsaved(False)
+	elif stage == BGTASK_STATE_ERROR:
+		RuntimeData['loaded-task-file'] = None
+
 
 def auto_save_task():
 	text = taskbody_buffer.get_text_all()
@@ -2039,17 +2319,7 @@ def auto_save_task():
 	# save but not too frequently
 	paced_action(5.0, save_file_asap, (loaded_task_file_fqp, text))
 
-def on_taskbody_typing(textbuffer, textiter, typedtext, length):
-	first_half, second_half = textbuffer.get_word_halves(textiter, word_re=taskbody_word_re)
-	act_taskbody_word(first_half + second_half, len(first_half))
-
-def on_taskbody_erase(textbuffer, startiter, enditer):
-	first_half = textbuffer.get_word_halves(startiter, word_re=taskbody_word_re)[0]
-	second_half = textbuffer.get_word_halves(enditer, word_re=taskbody_word_re)[1]
-	c_word = first_half+second_half
-	act_taskbody_word(c_word, len(first_half))
-
-def act_taskbody_word(word, pos):
+def update_suggestions_by_taskbody_word(word, pos):
 	if word.startswith('#') and pos>0:
 		completion_suggestions_box.show()
 		completion_suggestions_box.filter_for(word)
@@ -2060,89 +2330,26 @@ def act_change_font(*X):
 	dlg = gtk.FontSelectionDialog(_("Select Font"))
 	dlg.set_transient_for(main_win)
 	dlg.set_modal(True)
-	dlg.set_font_name(Props['field/taskbody/font'] or textview_get_current_font(taskbody_view)['name'])
+	dlg.set_font_name(Props['field/taskbody/font'] or notes_notebook.current_taskbody_view.font['name'])
 	if dlg.run() == gtk.RESPONSE_OK:
 		font_name = dlg.get_font_name()
 		Props['field/taskbody/font'] = font_name
-		taskbody_view_set_font(font_name)
+		notes_notebook.current_taskbody_view.font = font_name
 	dlg.destroy()
 
-def textview_get_current_font(textview):
-	pctx = textview.get_pango_context()
-	fdsc = pctx.get_font_description()
-	return {'name': fdsc.to_string(), 'size': int(fdsc.get_size()/pango.SCALE)}
 
-def taskbody_view_set_font(fontname):
-	taskbody_view.modify_font(pango.FontDescription(fontname))
-	fontsize = textview_get_current_font(taskbody_view)['size']
-	head_tag = taskbody_buffer.get_tag_by_name('headline')
-	head_tag.set_property('pixels-below-lines', int(fontsize * 0.8))
-
-def taskbody_view_toggle_wrap(*X):
-	wrap_mode = 'WRAP_NONE' if taskbody_view.get_wrap_mode() != gtk.WRAP_NONE else 'WRAP_WORD'
-	taskbody_view.set_wrap_mode(getattr(gtk, wrap_mode))
-	Props['field/taskbody/wrapmode'] = wrap_mode
-
-def on_taskbody_view_click(textview, event):
-	textview.set_data('pointed-word', None)
-	textiter = textview_get_iter_from_window_widget_coordinates(textview, event.x, event.y)
-	word = textview.get_buffer().get_word(textiter, word_re=taskbody_word_re)
-	textview.set_data('pointed-word', word)
-
-def on_taskbody_view_menu(Xtextview, menu):
-	pos = 0
-	
-	mi = ActionStockMenuItem(label=_("New task"), stock_id=gtk.STOCK_NEW, action=act_new_task)
-	menu.insert(mi, pos)
-	pos += 1
-	menu.insert(gtk.SeparatorMenuItem(), pos)
-	pos += 1
-	
-	has_selection = taskbody_buffer.get_has_selection()
-	pointed_word = taskbody_view.get_data('pointed-word')
-	if has_selection or pointed_word:
-		if has_selection:
-			mi_label_suffix = ' ' + _("selected")
-		elif pointed_word:
-			mi_label_suffix = ' \'%s\'' % pointed_word
-		else:
-			mi_label_suffix = ''
-		mi = ActionStockMenuItem(label=_("Search")+mi_label_suffix, stock_id=gtk.STOCK_FIND, action=act_search_text)
-		menu.insert(mi, pos)
-		pos += 1
-		mi = ActionStockMenuItem(label=_("Refine Search"), stock_id=gtk.STOCK_FIND, action=act_refine_search)
-		menu.insert(mi, pos)
-		pos += 1
-	if RuntimeData.get('loaded-task-file') is not None:
-		opened_file = add_path_prefix(RuntimeData.get('loaded-task-file'))
-		mi = ActionStockMenuItem(label=_("Done this task"), stock_id=gtk.STOCK_APPLY, action=lambda Xwidget, opened_file: act_task_done([opened_file]), action_userdata=(opened_file,))
-		menu.insert(mi, pos)
-		pos += 1
-	
-	mi = ActionStockMenuItem(label=_("Default Font…"), stock_id=gtk.STOCK_SELECT_FONT, action=act_change_font)
-	menu.insert(mi, pos)
-	pos += 1
-	
-	mi = gtk.CheckMenuItem(label=_("Wrap Lines"))
-	mi.set_active(taskbody_view.get_wrap_mode() != gtk.WRAP_NONE)
-	mi.connect('toggled', taskbody_view_toggle_wrap)
-	menu.insert(mi, pos)
-	pos += 1
-	
-	menu.insert(gtk.SeparatorMenuItem(), pos)
-	pos += 1
-	menu.show_all()
-
-def get_taskbody_selected_or_pointed_text():
-	if taskbody_buffer.get_has_selection():
-		return taskbody_buffer.get_selected_text()
+def get_taskbody_selected_or_pointed_text(textview):
+	if textview.textbuffer.get_has_selection():
+		return textview.textbuffer.get_selected_text()
 	else:
-		return taskbody_view.get_data('pointed-word')
-def act_search_text(*X):
-	searchbox.text = get_taskbody_selected_or_pointed_text()
+		return textview.get_data('pointed-word')
+def act_search_text(menuitem):
+	textview = menuitem.get_data('textview')
+	searchbox.text = get_taskbody_selected_or_pointed_text(textview)
 	searchboxhistory.push(searchbox.text)
-def act_refine_search(*X):
-	searchbox.text += ' ' + get_taskbody_selected_or_pointed_text()
+def act_refine_search(menuitem):
+	textview = menuitem.get_data('textview')
+	searchbox.text += ' ' + get_taskbody_selected_or_pointed_text(textview)
 	searchboxhistory.push(searchbox.text)
 
 class KeyDetector(object):
@@ -2178,86 +2385,8 @@ def handle_tab_completion(event, callback):
 			return True
 	return None
 
-def on_taskbody_view_keypress(widget, event):
-	keys = KeyDetector(event)
-	if completion_suggestions_box.get_visible():
-		def complete_word(word):
-			taskbody_buffer.replace_current_word(word+' ', word_re=taskbody_word_re)
-		tab_completion_handled = handle_tab_completion(event, callback=complete_word)
-		if tab_completion_handled is not None:
-			return tab_completion_handled
-	
-	if keys.escape:
-		completion_suggestions_box.hide()
-		return True
-	if keys.tab or keys.backtab:
-		selected_text = taskbody_buffer.get_selected_text()
-		if selected_text != '':
-			if keys.tab:
-				selected_text = re.sub(r'^(?=.)', '\t', selected_text, flags=re.M)
-			elif keys.backtab:
-				selected_text = re.sub(r'^\t', '', selected_text, flags=re.M)
-			taskbody_buffer.replace_selected_text(selected_text)
-		else:
-			if keys.tab:
-				return False
-			elif keys.backtab:
-				line = taskbody_buffer.get_current_line()
-				if line.startswith('\t'):
-					sol, Xeol = taskbody_buffer.get_current_line_boundaries()
-					taskbody_buffer.delete(taskbody_buffer.get_iter_at_offset(sol), taskbody_buffer.get_iter_at_offset(sol+1))
-		return True
-	if keys.control:
-		if keys.enter:
-			text = taskbody_buffer.get_text_all()
-			pos = taskbody_buffer.cursor_pos
-			for start, end, Xhideranges in find_markup_positions(text, 'link'):
-				if start <= pos < end:
-					link = taskbody_buffer.get_text_all()[start:end]
-					if link.startswith('file://'):
-						link = os.path.expanduser(link[7:])
-						link = urllib2.unquote(link)
-					run_async('xdg-open', [link])
-					return True
-			c_word = current_word(text, pos, word_re=taskbody_word_re)
-			if c_word.startswith('#'):
-				searchbox.text = searchbox.text + ' ' + c_word
-				return True
-			c_date = re.search(RE_DATE, current_word(text, pos, word_re=r'[0-9a-z-]'), re.I)
-			if c_date:
-				y, m, d = map(int, c_date.groups())
-				calendar.goto(y, month_name_to_number(m), d)
-				return True
-		elif keys.B:
-			s = taskbody_buffer.get_selected_text()
-			if s.startswith('*') and s.endswith('*') and len(s)>2:
-				s = s[1:-1]
-			else:
-				s = '*' + s + '*'
-			taskbody_buffer.replace_selected_text(s)
-			return True
-		elif keys.Y or (keys.Z and keys.shift):
-			taskbody_buffer.redo()
-			act_taskbody_view_scroll_to_cursor()
-			return True
-		elif keys.Z:
-			taskbody_buffer.undo()
-			act_taskbody_view_scroll_to_cursor()
-			return True
-	if keys.alt and keys.T:
-		taskbody_buffer.insert_at_cursor(time.strftime('%Y-%m-%d'))
-		return True
 
-def act_taskbody_view_scroll_to_cursor():
-	taskbody_view.scroll_to_mark(taskbody_buffer.get_insert(), within_margin=0.33)
 
-def on_taskbody_view_cursor_moved(Xtextview, Xstep_size, Xcount, Xextend_selection):
-	first_half, second_half = taskbody_buffer.get_word_halves(taskbody_buffer.cursor_iter, word_re=taskbody_word_re)
-	act_taskbody_word(first_half + second_half, len(first_half))
-
-def on_taskbody_view_focus(*X):
-	completion_items = make_tag_suggestion_list(AllTags)
-	completion_suggestions_box.set_items(completion_items)
 
 def taskbody_insert_line(s):
 	pre, post = taskbody_buffer.get_buffer_halves()
@@ -2291,18 +2420,18 @@ def taskbody_remove_text_around_cursor(s):
 		remove_length = remove_length + 1
 	taskbody_buffer.replace_text(remove_from_pos, remove_length, '')
 
-def act_close_task():
-	save_position()
-	if RuntimeData.get('unsaved'):
-		auto_save_task()
-	RuntimeData['loaded-task-file'] = None
-	RuntimeData['loaded-file-edit-position'] = None
-	taskbody_buffer.reinit('')
+def act_focus_current_task():
+	notes_notebook.current_taskbody_view.grab_focus()
+
+def act_close_current_task():
+	if RuntimeData.get('loaded-task'):
+		RuntimeData['loaded-task'].dismiss()
+	RuntimeData['loaded-task'] = None
 
 def act_new_task(*_X):
-	act_close_task()
+	act_close_current_task()
 	tasklist_selection.unselect_all()
-	taskbody_view.grab_focus()
+	act_focus_current_task()
 
 
 HelpWindow = gtk.MessageDialog(None, gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_INFO, gtk.BUTTONS_OK)
@@ -2337,19 +2466,28 @@ Props = PropertyTree()
 RuntimeData = {}
 AllTags = {}
 ioQueue = Queue.Queue()
+BGTASK_STATE_START, BGTASK_STATE_FINISH, BGTASK_STATE_ERROR = range(3)
 
 def on_io_work(state, task, exception=None):
 	gtk.threads_enter()
-	Xoper, Xparams, message = task
-	assert state in ('start', 'finish', 'error')
-	if state == 'start':
+	Xoper, Xparams, message, user_callback = task
+	if user_callback is None:
+		user_callback = lambda *X: None
+	
+	if state == BGTASK_STATE_START:
 		tasklist_top_labels_left.add_state(message)
-	elif state == 'finish':
+		user_callback(state, task)
+	elif state == BGTASK_STATE_FINISH:
 		tasklist_top_labels_left.remove_state(message)
-	elif state == 'error':
+		user_callback(state, task)
+	elif state == BGTASK_STATE_ERROR:
 		tasklist_top_labels_left.remove_state(message)
-		traceback.print_exception(*exception)
-		display_error(exception[1])
+		if not user_callback(state, task, exception):
+			traceback.print_exception(*exception)
+			display_error(exception[1])
+	else:
+		gtk.threads_leave()
+		assert False, "task state is invalid"
 	gtk.threads_leave()
 
 class ioWorker(threading.Thread):
@@ -2357,30 +2495,36 @@ class ioWorker(threading.Thread):
 		super(self.__class__, self).__init__()
 		self._queue = queue
 		self._status_callback = status_callback
+	
 	def run(self):
 		while True:
 			task = self._queue.get()
-			oper, params, cb_data = task[:]
+			oper, params = task[0:2]
 			if oper == 'exit':
 				self._queue.task_done()
 				break
-			self._status_callback('start', task)
+			self._status_callback(BGTASK_STATE_START, task)
 			try:
 				getattr(self, 'op_'+oper)(*params)
 			except:
-				self._status_callback('error', task, sys.exc_info())
+				self._status_callback(BGTASK_STATE_ERROR, task, sys.exc_info())
 			else:
-				self._status_callback('finish', task)
+				self._status_callback(BGTASK_STATE_FINISH, task)
 			self._queue.task_done()
+	
 	def op_mkdir(self, path):
 		mkdir(path)
+	
 	def op_write(self, path, content):
 		with open(path, 'w') as f:
 			f.write(content)
+	
 	def op_rename(self, oldpath, newpath):
 		os.rename(oldpath, newpath)
+	
 	def op_remove(self, path):
 		os.remove(path)
+	
 	def op_setxattr(self, path, attrname, attrval):
 		xattr.setxattr(path, attrname, attrval)
 
@@ -2390,7 +2534,7 @@ if do_create_notes_dir and not os.path.exists(NOTES_DIR):
 	mkdir(NOTES_DIR)
 
 
-ioThread = ioWorker(ioQueue, on_io_work)
+ioThread = ioWorker(ioQueue, status_callback=on_io_work)
 ioThread.start()
 tasklist_loader = TasklistLoader()
 tasklist_loader.daemon = True
@@ -2511,22 +2655,7 @@ tasklist_selection = tasklist_view.get_selection()
 tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
 tasklist_selection.connect('changed', on_tasklist_selection_change)
 
-taskbody_buffer = TextBuffer()
-taskbody_buffer.connect('changed', on_taskbody_changed)
-taskbody_buffer.connect_after('insert-text', on_taskbody_typing)
-taskbody_buffer.connect('delete-range', on_taskbody_erase)
-
-taskbody_view = gtk.TextView(buffer=taskbody_buffer)
-taskbody_view_set_font(Props['field/taskbody/font'] or '')
-taskbody_view.set_wrap_mode(getattr(gtk, Props['field/taskbody/wrapmode'] or 'WRAP_WORD'))
-taskbody_view.connect('button-press-event', on_taskbody_view_click)
-taskbody_view.connect('populate-popup', on_taskbody_view_menu)
-taskbody_view.connect('key-press-event', on_taskbody_view_keypress)
-taskbody_view.connect_after('move-cursor', on_taskbody_view_cursor_moved)
-taskbody_view.connect('focus-in-event', on_taskbody_view_focus)
-taskbody_view.drag_dest_set(gtk.DEST_DEFAULT_HIGHLIGHT, [('text/uri-list', 0, 0), ('text/plain', 0, 1)], gtk.gdk.ACTION_LINK)
-taskbody_view.connect('drag-data-received', on_taskbody_dnd_data)
-
+notes_notebook = uNotebook()
 completion_suggestions_box = CompletionSuggestionsBox()
 
 calendar = Calendar()
@@ -2543,10 +2672,10 @@ add_key_binding(main_win, '<Mod1>Up', lambda *X: act_tasklist_select_updown(up=T
 add_key_binding(main_win, '<Mod1>Down', lambda *X: act_tasklist_select_updown(up=False))
 add_key_binding(main_win, '<Mod1>Left', lambda *X: act_tasklist_select_prevnext(prev=True))
 add_key_binding(main_win, '<Mod1>Right', lambda *X: act_tasklist_select_prevnext(prev=False))
-add_key_binding(main_win, '<Control>t', lambda *X: taskbody_view.grab_focus())
+add_key_binding(main_win, '<Control>t', lambda *X: act_focus_current_task())
 add_key_binding(main_win, '<Control>n', lambda *X: act_new_task())
 add_key_binding(main_win, '<Control><Shift>l', lambda *X: do_layout(LAYOUT[(LAYOUT.index(Props['layout/layout-set'])+1)%len(LAYOUT)]))
-add_key_binding(main_win, '<Control><Shift>w', taskbody_view_toggle_wrap)
+add_key_binding(main_win, '<Control><Shift>w', lambda *X: notes_notebook.current_taskbody_view.toggle_wrap())
 add_key_binding(main_win, 'F4', act_open_selected_tasks)
 add_key_binding(main_win, 'F1', lambda *X: (HelpWindow.hide(), HelpWindow.show_all()))  # hide and show raises the window most reliably
 main_win.connect('delete-event', lambda *X: main_quit())
@@ -2561,7 +2690,7 @@ box_tasklist.pack_start(tasklist_top, expand=False)
 box_tasklist.pack_start(ScrolledWidget(tasklist_view))
 box_bottom = gtk.HBox()
 box_taskview = gtk.VBox()
-box_taskview.pack_start(ScrolledWidget(taskbody_view))
+box_taskview.pack_start(notes_notebook)
 box_taskview.pack_start(completion_suggestions_box, expand=False)
 box_auxtools = gtk.VBox()
 box_auxtools.pack_start(calendar)
