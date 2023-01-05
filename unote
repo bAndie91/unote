@@ -280,6 +280,7 @@ class TextBuffer(gtk.TextBuffer):
 	# at least this many char addition+removal triggers an undo checkpoint:
 	undo_checkpoint_threshold = 32
 	undo_stack_size_limit = 2*1024*1024
+	can_surround_chars = ['\n', ' ', '\t', ':', ',', ';']
 	
 	def __init__(self, *args):
 		self._eventhandlers = []
@@ -375,6 +376,35 @@ class TextBuffer(gtk.TextBuffer):
 	def get_current_line(self):
 		sol, eol = map(self.get_iter_at_offset, self.get_current_line_boundaries())
 		return self.get_slice(sol, eol, include_hidden_chars=True)
+	def insert_line(self, s):
+		pre, post = self.get_buffer_halves()
+		if pre[-1] not in self.can_surround_chars: s = '\n' + s
+		if post == '' or post[0] not in self.can_surround_chars: s = s + '\n'
+		self.insert_at_cursor(s)
+	def remove_text_around_cursor(self, s):
+		"""removes first occurrance of s from the text buffer before the cursor
+		or after the cursor, whichever is the nearest.
+		removes newline if s is a complete line."""
+		pre, post = self.get_buffer_halves()
+		pre_pos = (pre+post).rfind(s, 0, len(pre)+len(s)-2)
+		post_pos = post.find(s)
+		if pre_pos > -1 and post_pos > -1:
+			pre_distance = len(pre) - pre_pos - len(s)
+			post_distance = post_pos
+			if post_distance < pre_distance:
+				remove_from_pos = len(pre)+post_pos
+			else:
+				remove_from_pos = pre_pos
+		elif post_pos > -1:
+			remove_from_pos = len(pre)+post_pos
+		elif pre_pos > -1:
+			remove_from_pos = pre_pos
+		else:
+			return False
+		remove_length = len(s)
+		if (remove_from_pos > 0 and (pre+post)[remove_from_pos-1] == '\n' or remove_from_pos == 0) and remove_from_pos+len(s) < len(pre+post) and (pre+post)[remove_from_pos+len(s)] == '\n':
+			remove_length = remove_length + 1
+		self.replace_text(remove_from_pos, remove_length, '')
 	def apply_tag_by_name(self, tagname, pos1, pos2):
 		super(self.__class__, self).apply_tag_by_name(tagname, self.get_iter_at_offset(pos1), self.get_iter_at_offset(pos2))
 	def remove_all_tags(self, start=None, end=None):
@@ -1391,17 +1421,17 @@ def load_tasklist():
 			update_task_in_list(tasklist, treeiter, task_text, task_file)
 			gtk.threads_leave(); is_gtk_locked = False
 		
-		loaded_file_path = add_path_prefix(RuntimeData.get('loaded-task-file'))
+		opened_note_files = [page.usernote.source_file_pfx for page in notes_notebook.page_widgets]
 		for task_file, row in rows_to_forget.iteritems():
 			gtk.threads_enter(); is_gtk_locked = True
-			if loaded_file_path != task_file:
+			if task_file not in opened_note_files:
 				tasklist.remove(row.iter)
 			gtk.threads_leave(); is_gtk_locked = False
 		for task_file, row in rows_to_forget.iteritems():
 			gtk.threads_enter(); is_gtk_locked = True
-			if loaded_file_path == task_file:
-				# currently opened task is gone from the overall task list, close it
-				act_close_current_task()
+			if task_file in opened_note_files:
+				# currently opened task is gone from the overall task list, leave it open
+				# but remove from the task list
 				tasklist.remove(row.iter)
 			gtk.threads_leave(); is_gtk_locked = False
 	finally:
@@ -1441,19 +1471,14 @@ def load_task(task_file_nonprefixed, task_text):
 	act_close_current_task()
 	task_page = notes_notebook.new_page()
 	task = task_page.usernote
-	task.source_file = task_file_nonprefixed
+	task.source_file_nonpfx = task_file_nonprefixed
 	task.text = task_text
 	task.saved = True
 	task.restore_cursor_position()
 	# TODO: scroll to cursor
-	RuntimeData['loaded-task'] = task
 	
 	Props['history/last/opened-task/path'] = task_file_nonprefixed
 	taskhistorylist.push(task_file_nonprefixed)
-
-def load_taskbody(text):
-	parse_taskbody(text)
-	calendar.goto_today()
 
 def month_name_to_number(m):
 	monthabbrevations = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
@@ -1503,14 +1528,15 @@ def find_markup_positions(text, markupname):
 	else:
 		raise
 
-def parse_taskbody(text):
+def format_taskbody(textbuffer):
 	# style and format text
-	taskbody_buffer.remove_all_tags()
+	text = textbuffer.get_text_all()
+	textbuffer.remove_all_tags()
 	for markupname in ['headline', 'link', 'strike', 'bold', 'code', 'alert']:
 		for start, end, hideranges in find_markup_positions(text, markupname):
-			taskbody_buffer.apply_tag_by_name(markupname, start, end)
+			textbuffer.apply_tag_by_name(markupname, start, end)
 			for start, end in hideranges:
-				taskbody_buffer.apply_tag_by_name('hidden', start, end)
+				textbuffer.apply_tag_by_name('hidden', start, end)
 	
 	# find date strings and show them in calendar
 	calendar_marks = []
@@ -1518,6 +1544,8 @@ def parse_taskbody(text):
 		calendar_marks.append('%d-%d-%d' % (int(y), int(month_name_to_number(m)), int(d)))
 	for m, d in re.findall(r'\b(' + RE_MONTHNAMES + r')(?:-|\s+)(' + RE_DAYSOFMONTH + ')\b', text, re.I):
 		calendar_marks.append('0-%d-%d' % (int(month_name_to_number(m)), int(d)))
+	
+	calendar = textbuffer.calendar_widget
 	calendar.set_marks(calendar_marks)
 	if calendar_marks or re.search(r'\b(date|due):', text, re.I):
 		if not calendar.get_visible():
@@ -1528,15 +1556,9 @@ def parse_taskbody(text):
 
 def on_tasklist_selection_change(selection):
 	model, iterpaths = selection.get_selected_rows()
-	if len(iterpaths) == 0:
-		return
-	iterpath = iterpaths[0]
-	# TODO: support multiple loaded tasks
-	row = model[iterpath]
-	loaded_task_file = add_path_prefix(RuntimeData.get('loaded-task-file'))
-	if loaded_task_file is not None and loaded_task_file == row['file']:
-		return
-	load_task(strip_path_prefix(row['file']), row['raw_text'])
+	for iterpath in iterpaths:
+		row = model[iterpath]
+		notes_notebook.open_note(strip_path_prefix(row['file']), row['raw_text'])
 
 def timer_once(sec, func, func_args=(), keep_old_schedules=False, iden=None):
 	if iden is None:
@@ -1840,10 +1862,10 @@ def on_tasklist_dnd_drop(treeview, context, x, y, eventtime):
 def on_tasklist_dnd_data(treeview, context, x, y, selectiondata, int_id, eventtime):
 	datatype = selectiondata.get_data_type()
 	if datatype == 'text/plain':
-		text = selectiondata.get_text()
-		act_new_task()
-		taskbody_buffer.set_text(text)
+		page = notes_notebook.new_page()
+		page.usernote.text = selectiondata.get_text()
 		context.finish(success=True, del_=False, time=eventtime)
+	# TODO: support D'n'D file URIs -> copy them to the Notes dir
 	else:
 		sys.stderr.write((_("Unsupported Drag-and-Drop data type: '%s'")+'\n') % datatype)
 	# call stop_emission() to prevent the following warning:
@@ -2004,17 +2026,24 @@ class uNotebook(gtk.Notebook):
 		return self.get_nth_page(self.get_current_page())
 	
 	@property
+	def page_widgets(self):
+		for n in range(self.get_n_pages()):
+			yield self.get_nth_page(n)
+	
+	@property
 	def current_taskbody_view(self):
 		return self.current_page_widget.taskbody_view
 	
 	@property
 	def current_note(self):
+		if self.get_current_page() is None: return None
 		return self.current_page_widget.usernote
 	
 	def on_pages_changed(self, *X):
 		self.set_show_tabs(self.get_n_pages() > 1)
 	
 	def new_page(self):
+		box = gtk.HBox()
 		taskbody_buffer = TextBuffer()
 		taskbody_buffer.connect_after('insert-text', on_taskbody_typing)
 		taskbody_buffer.connect('delete-range', on_taskbody_erase)
@@ -2030,13 +2059,27 @@ class uNotebook(gtk.Notebook):
 		taskbody_view.drag_dest_set(gtk.DEST_DEFAULT_HIGHLIGHT, [('text/uri-list', 0, 0), ('text/plain', 0, 1)], gtk.gdk.ACTION_LINK)
 		taskbody_view.connect('drag-data-received', on_taskbody_dnd_data)
 		
-		page_widget = ScrolledWidget(taskbody_view)
-		page_widget.taskbody_view = taskbody_view
-		page_widget.usernote = UserNote(taskbody_buffer)
-		taskbody_view.usernote = page_widget.usernote
-		self.append_page(page_widget)
+		usernote = UserNote(taskbody_buffer)
+		
+		calendar = Calendar()
+		calendar.connect('mark-added', lambda X, date, textbuffer: textbuffer.insert_line(date), taskbody_buffer)
+		calendar.connect('mark-removed', lambda X, date, textbuffer: textbuffer.remove_text_around_cursor(date), taskbody_buffer)
+
+		taskbody_view.usernote = usernote
+		taskbody_view.calendar_widget = calendar
+		taskbody_buffer.calendar_widget = calendar
+		
+		scrolled_textview = ScrolledWidget(taskbody_view)
+		box.pack_start(scrolled_textview, expand=True)
+		box.pack_start(calendar, expand=False)
+		
+		self.append_page(box)
+		box.taskbody_view = taskbody_view
+		box.usernote = usernote
+		
 		self.show_all()
-		return page_widget
+		calendar.hide()
+		return box
 
 def on_taskbody_typing(textbuffer, textiter, typedtext, length):
 	first_half, second_half = textbuffer.get_word_halves(textiter, word_re=RE_TASKBODY_WORD)
@@ -2080,9 +2123,8 @@ def on_taskbody_view_menu(textview, menu):
 		mi.set_data('textview', textview)
 		menu.insert(mi, pos)
 		pos += 1
-	if textview.usernote.source_file is not None:
-		opened_file = add_path_prefix(textview.usernote.source_file)
-		mi = ActionStockMenuItem(label=_("Done this task"), stock_id=gtk.STOCK_APPLY, action=lambda Xwidget, opened_file: act_task_done([opened_file]), action_userdata=(opened_file,))
+	if textview.usernote.source_file_pfx is not None:
+		mi = ActionStockMenuItem(label=_("Done this task"), stock_id=gtk.STOCK_APPLY, action=lambda Xwidget, opened_file: act_task_done([opened_file]), action_userdata=(textview.usernote.source_file_pfx,))
 		menu.insert(mi, pos)
 		pos += 1
 	
@@ -2146,7 +2188,7 @@ def on_taskbody_view_keypress(textview, event):
 			c_date = re.search(RE_DATE, current_word(text, pos, word_re=r'[0-9a-z-]'), re.I)
 			if c_date:
 				y, m, d = map(int, c_date.groups())
-				calendar.goto(y, month_name_to_number(m), d)
+				textview.calendar_widget.goto(y, month_name_to_number(m), d)
 				return True
 		elif keys.B:
 			s = textview.textbuffer.get_selected_text()
@@ -2198,11 +2240,27 @@ class UserNote(gobject.GObject):
 	
 	def __init__(self, textbuffer):
 		super(self.__class__, self).__init__()
-		self.source_file = None
+		self.source_file_nonpfx = None
 		self.saved = None
 		self.sighandler = {}
 		self.textbuffer = textbuffer
 		self.saved_cursor_position = None
+	
+	@property
+	def source_file_pfx(self):
+		return add_path_prefix(self.source_file_nonpfx)
+	
+	@source_file_pfx.setter
+	def source_file_pfx(self, new):
+		self._source_file_nonpfx = strip_path_prefix(new)
+	
+	@property
+	def source_file_nonpfx(self):
+		return self._source_file_nonpfx
+	
+	@source_file_nonpfx.setter
+	def source_file_nonpfx(self, new):
+		self._source_file_nonpfx = new
 	
 	@property
 	def textbuffer(self):
@@ -2222,7 +2280,7 @@ class UserNote(gobject.GObject):
 	
 	def on_text_changed(self, *X):
 		self.saved = False
-		parse_taskbody(self.text)
+		format_taskbody(self.textbuffer)
 		self.auto_save()
 	
 	@property
@@ -2255,15 +2313,13 @@ class UserNote(gobject.GObject):
 		# TODO: put indicator on tab label
 	
 	def save_cursor_position(self):
-		filepath = add_path_prefix(self.source_file)
 		pos = self.textbuffer.cursor_pos
-		if self.saved_cursor_position != pos and filepath is not None and os.path.exists(filepath):
-			ioQueue.put(('setxattr', [filepath, self.xattr_cursor_position, str(pos)], _("saving state…"), None))
+		if self.saved_cursor_position != pos and self.source_file_pfx is not None and os.path.exists(self.source_file_pfx):
+			ioQueue.put(('setxattr', [self.source_file_pfx, self.xattr_cursor_position, str(pos)], _("saving state…"), None))
 	
 	def restore_cursor_position(self):
-		filepath = add_path_prefix(self.source_file)
 		try:
-			cursor_pos = xattr.getxattr(filepath, self.xattr_cursor_position)
+			cursor_pos = xattr.getxattr(self.source_file_pfx, self.xattr_cursor_position)
 		except IOError as e:
 			if e.errno == errno.ENODATA: pass
 			else: raise
@@ -2281,19 +2337,15 @@ class UserNote(gobject.GObject):
 		# TODO: last save
 	
 	def auto_save(self):
-		# TODO
-		# TODO: re-open note if delayed save failed
-		pass
-
-def save_file_asap(fullpath, text):
-	ioQueue.put(('write', [fullpath, text], _("saving note…"), cb_save_file_asap))
-
-def cb_save_file_asap(stage, io_task, exception=None):
-	if stage == BGTASK_STATE_FINISH:
-		task_is_unsaved(False)
-	elif stage == BGTASK_STATE_ERROR:
-		RuntimeData['loaded-task-file'] = None
-
+		# TODO review
+		ioQueue.put(('write', [self.source_file_pfx, self.text], _("saving note…"), self.save_file_cb))
+	
+	def save_file_cb(self, stage, io_task, exception=None):
+		if stage == BGTASK_STATE_FINISH:
+			self.saved = True
+		elif stage == BGTASK_STATE_ERROR:
+			# TODO: re-open note if delayed save failed
+			pass
 
 def auto_save_task():
 	text = taskbody_buffer.get_text_all()
@@ -2388,45 +2440,14 @@ def handle_tab_completion(event, callback):
 
 
 
-def taskbody_insert_line(s):
-	pre, post = taskbody_buffer.get_buffer_halves()
-	can_surround_chars = ['\n', ' ', '\t', ':', ',', ';']
-	if pre[-1] not in can_surround_chars: s = '\n' + s
-	if post == '' or post[0] not in can_surround_chars: s = s + '\n'
-	taskbody_buffer.insert_at_cursor(s)
-
-def taskbody_remove_text_around_cursor(s):
-	"""removes first occurrance of s from taskbody_buffer before the cursor
-	or after the cursor, whichever is the nearest.
-	removes newline if s is a complete line."""
-	pre, post = taskbody_buffer.get_buffer_halves()
-	pre_pos = (pre+post).rfind(s, 0, len(pre)+len(s)-2)
-	post_pos = post.find(s)
-	if pre_pos > -1 and post_pos > -1:
-		pre_distance = len(pre) - pre_pos - len(s)
-		post_distance = post_pos
-		if post_distance < pre_distance:
-			remove_from_pos = len(pre)+post_pos
-		else:
-			remove_from_pos = pre_pos
-	elif post_pos > -1:
-		remove_from_pos = len(pre)+post_pos
-	elif pre_pos > -1:
-		remove_from_pos = pre_pos
-	else:
-		return False
-	remove_length = len(s)
-	if (remove_from_pos > 0 and (pre+post)[remove_from_pos-1] == '\n' or remove_from_pos == 0) and remove_from_pos+len(s) < len(pre+post) and (pre+post)[remove_from_pos+len(s)] == '\n':
-		remove_length = remove_length + 1
-	taskbody_buffer.replace_text(remove_from_pos, remove_length, '')
 
 def act_focus_current_task():
 	notes_notebook.current_taskbody_view.grab_focus()
 
 def act_close_current_task():
-	if RuntimeData.get('loaded-task'):
-		RuntimeData['loaded-task'].dismiss()
-	RuntimeData['loaded-task'] = None
+	note = notes_notebook.current_note
+	if note is not None:
+		note.dismiss()
 
 def act_new_task(*_X):
 	act_close_current_task()
@@ -2658,10 +2679,6 @@ tasklist_selection.connect('changed', on_tasklist_selection_change)
 notes_notebook = uNotebook()
 completion_suggestions_box = CompletionSuggestionsBox()
 
-calendar = Calendar()
-calendar.connect('mark-added', lambda X, date: taskbody_insert_line(date))
-calendar.connect('mark-removed', lambda X, date: taskbody_remove_text_around_cursor(date))
-
 add_key_binding(main_win, '<Control>q', lambda *X: main_quit())
 add_key_binding(main_win, '<Control>f', lambda *X: searchbox.grab_focus())
 add_key_binding(main_win, '<Control>l', lambda *X: searchbox.grab_focus())
@@ -2693,7 +2710,6 @@ box_taskview = gtk.VBox()
 box_taskview.pack_start(notes_notebook)
 box_taskview.pack_start(completion_suggestions_box, expand=False)
 box_auxtools = gtk.VBox()
-box_auxtools.pack_start(calendar)
 
 LAYOUT = ['3COL', '2COL1ROW', '1COL2ROW']
 def do_layout(layout):
@@ -2761,7 +2777,6 @@ def do_layout(layout):
 		box_bottom.pack_start(box_auxtools, expand=False)
 	
 	main_win.show_all()
-	calendar.hide()
 	completion_suggestions_box.hide()
 	Props['layout/layout-set'] = layout
 
