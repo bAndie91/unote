@@ -31,8 +31,14 @@ gtk.gdk.threads_init()
 import urllib2
 import unicodedata
 
-
 APPNAME = 'unote'
+try:
+	import setproctitle
+	setproctitle.setproctitle(APPNAME)
+except:
+	pass
+
+
 do_create_notes_dir = False
 try:
 	NOTES_DIR = sys.argv[1]
