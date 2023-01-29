@@ -346,7 +346,9 @@ class TextBuffer(gtk.TextBuffer):
 		self.delete(start, end)
 		self.insert(start, replacement)
 	def connect(self, eventname, *args):
-		self._eventhandlers.append(super(self.__class__, self).connect(eventname, *args))
+		eventhandler = super(self.__class__, self).connect(eventname, *args)
+		self._eventhandlers.append(eventhandler)
+		return eventhandler
 	def disconnect(self, eventhandle):
 		super(self.__class__, self).disconnect(eventhandle)
 		self._eventhandlers.remove(eventhandle)
@@ -1564,7 +1566,7 @@ def on_tasklist_selection_change(selection):
 	model, iterpaths = selection.get_selected_rows()
 	for iterpath in iterpaths:
 		row = model[iterpath]
-		notes_notebook.open_note(strip_path_prefix(row['file']), row['raw_text'])
+		load_task(strip_path_prefix(row['file']), row['raw_text'])
 
 def timer_once(sec, func, func_args=(), keep_old_schedules=False, iden=None):
 	if iden is None:
@@ -2042,11 +2044,17 @@ class uNotebook(gtk.Notebook):
 	
 	@property
 	def current_note(self):
-		if self.get_current_page() is None: return None
+		if self.current_page_widget is None: return None
 		return self.current_page_widget.usernote
 	
 	def on_pages_changed(self, *X):
 		self.set_show_tabs(self.get_n_pages() > 1)
+	
+	def close_tab_by_widget(self, widget):
+		for page in range(self.get_n_pages()):
+			if self.get_nth_page(page) == widget:
+				self.remove_page(page)
+				break
 	
 	def new_page(self):
 		box = gtk.HBox()
@@ -2066,6 +2074,7 @@ class uNotebook(gtk.Notebook):
 		taskbody_view.connect('drag-data-received', on_taskbody_dnd_data)
 		
 		usernote = UserNote(taskbody_buffer)
+		usernote.connect('dismissed', lambda X: self.close_tab_by_widget(box))
 		
 		calendar = Calendar()
 		calendar.connect('mark-added', lambda X, date, textbuffer: textbuffer.insert_line(date), taskbody_buffer)
@@ -2080,6 +2089,7 @@ class uNotebook(gtk.Notebook):
 		box.pack_start(calendar, expand=False)
 		
 		self.append_page(box)
+		self.set_tab_reorderable(box, True)
 		box.taskbody_view = taskbody_view
 		box.usernote = usernote
 		
@@ -2242,6 +2252,10 @@ def on_taskbody_dnd_data(textview, context, x, y, selectiondata, int_id, eventti
 
 
 class UserNote(gobject.GObject):
+	__gsignals__ = {
+		'dismissed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()),
+	}
+
 	xattr_cursor_position = 'user.textedit.cursor_position'
 	
 	def __init__(self, textbuffer):
@@ -2254,6 +2268,7 @@ class UserNote(gobject.GObject):
 	
 	@property
 	def source_file_pfx(self):
+		if self.source_file_nonpfx is None: return None
 		return add_path_prefix(self.source_file_nonpfx)
 	
 	@source_file_pfx.setter
@@ -2279,9 +2294,9 @@ class UserNote(gobject.GObject):
 			self.sighandler['changed'] = textbuffer.connect('changed', self.on_text_changed)
 		else:
 			# unbound from the TextBuffer UI element
-			for sig in self.sighandler:
-				self._textbuffer.disconnect(self.sighandler[sig])
-				del self.sighandler[sig]
+			for signame, signumb in list(self.sighandler.iteritems()):
+				self._textbuffer.disconnect(signumb)
+				del self.sighandler[signame]
 		self._textbuffer = textbuffer
 	
 	def on_text_changed(self, *X):
@@ -2340,42 +2355,49 @@ class UserNote(gobject.GObject):
 		self._text = self.text
 		self.text = ''
 		self.textbuffer = None
+		self.emit('dismissed')
 		# TODO: last save
 	
 	def auto_save(self):
 		# TODO review
-		ioQueue.put(('write', [self.source_file_pfx, self.text], _("saving note…"), self.save_file_cb))
+		if self.source_file_pfx is None:
+			# don't save new task until at least one line is entered,
+			# and generate file name from the first line
+			m = re.search(r'^\s*(.+?)\n', self.text)
+			if not m: return
+			first_line = m.group(1)
+			filepath = find_nonexistent_file(NOTES_DIR, filenameize(first_line) + '.txt')
+		else:
+			# save but not too frequently
+			# TODO paced_action
+			ioQueue.put(('write', [self.source_file_pfx, self.text], _("saving note…"), self.save_file_cb))
+		
+		# update task in the tasklist
+		try:
+			treeiter = get_tasklist_treeiter_by_file(self.source_file_pfx)
+		except KeyError:
+			# new file has not been noticed yet (async IO is behind us)
+			pass
+		else:
+			update_task_in_list(tasklist, treeiter, task_text=self.text)
 	
 	def save_file_cb(self, stage, io_task, exception=None):
 		if stage == BGTASK_STATE_FINISH:
 			self.saved = True
+			if self.source_file_pfx is None:
+				self.source_file_pfx = io_task[1][0]
+			# update task in the tasklist
+			try:
+				treeiter = get_tasklist_treeiter_by_file(self.source_file_pfx)
+			except KeyError:
+				# new file has not been noticed yet (async IO is behind us)
+				pass
+			else:
+				update_task_in_list(tasklist, treeiter, task_file=self.source_file_pfx)
 		elif stage == BGTASK_STATE_ERROR:
 			# TODO: re-open note if delayed save failed
 			pass
 
-def auto_save_task():
-	text = taskbody_buffer.get_text_all()
-	loaded_task_file = RuntimeData.get('loaded-task-file')
-	if loaded_task_file is None:
-		# don't save new task until at least one line is entered,
-		# and generate file name from the first line
-		m = re.search(r'^\s*(.+?)\n', text)
-		if not m: return
-		first_line = m.group(1)
-		filepath = find_nonexistent_file(NOTES_DIR, filenameize(first_line) + '.txt')
-		RuntimeData['loaded-task-file'] = strip_path_prefix(filepath)
-	
-	loaded_task_file = RuntimeData.get('loaded-task-file')
-	loaded_task_file_fqp = add_path_prefix(loaded_task_file)
-	try:
-		treeiter = get_tasklist_treeiter_by_file(loaded_task_file_fqp)
-	except KeyError:
-		# new file has not been noticed yet (async IO is being slow)
-		pass
-	else:
-		update_task_in_list(tasklist, treeiter, task_text=text, task_mtime=time.time())
-	# save but not too frequently
-	paced_action(5.0, save_file_asap, (loaded_task_file_fqp, text))
 
 def update_suggestions_by_taskbody_word(word, pos):
 	if word.startswith('#') and pos>0:
@@ -2456,9 +2478,7 @@ def act_close_current_task():
 		note.dismiss()
 
 def act_new_task(*_X):
-	act_close_current_task()
-	tasklist_selection.unselect_all()
-	act_focus_current_task()
+	notes_notebook.new_page()
 
 
 HelpWindow = gtk.MessageDialog(None, gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_INFO, gtk.BUTTONS_OK)
