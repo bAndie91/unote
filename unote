@@ -384,6 +384,11 @@ class TextBuffer(gtk.TextBuffer):
 	def get_current_line(self):
 		sol, eol = map(self.get_iter_at_offset, self.get_current_line_boundaries())
 		return self.get_slice(sol, eol, include_hidden_chars=True)
+	def get_line(self, ln):
+		s = self.get_slice(self.get_iter_at_line(0), self.get_iter_at_line(1), include_hidden_chars=True)
+		eol = s.find('\n')
+		if eol == -1: return s
+		return s[0:eol]
 	def insert_line(self, s):
 		pre, post = self.get_buffer_halves()
 		if pre[-1] not in self.can_surround_chars: s = '\n' + s
@@ -1476,7 +1481,7 @@ def process_tasklist():
 	tasklist.foreach(count_tags, AllTags)
 
 def load_task(task_file_nonprefixed, task_text):
-	act_close_current_task()
+	page_num = act_close_current_task()
 	task_page = notes_notebook.new_page()
 	task = task_page.usernote
 	task.source_file_nonpfx = task_file_nonprefixed
@@ -1484,6 +1489,8 @@ def load_task(task_file_nonprefixed, task_text):
 	task.saved = True
 	task.restore_cursor_position()
 	# TODO: scroll to cursor
+	notes_notebook.set_current_page(notes_notebook.page_num(task_page))
+	notes_notebook.reorder_child(task_page, page_num)
 	
 	Props['history/last/opened-task/path'] = task_file_nonprefixed
 	taskhistorylist.push(task_file_nonprefixed)
@@ -2051,10 +2058,9 @@ class uNotebook(gtk.Notebook):
 		self.set_show_tabs(self.get_n_pages() > 1)
 	
 	def close_tab_by_widget(self, widget):
-		for page in range(self.get_n_pages()):
-			if self.get_nth_page(page) == widget:
-				self.remove_page(page)
-				break
+		page = self.page_num(widget)
+		if page != -1:
+			self.remove_page(page)
 	
 	def new_page(self):
 		box = gtk.HBox()
@@ -2075,6 +2081,7 @@ class uNotebook(gtk.Notebook):
 		
 		usernote = UserNote(taskbody_buffer)
 		usernote.connect('dismissed', lambda X: self.close_tab_by_widget(box))
+		usernote.connect('title-line-changed', lambda X, s: self.set_tab_label_text(box, s))
 		
 		calendar = Calendar()
 		calendar.connect('mark-added', lambda X, date, textbuffer: textbuffer.insert_line(date), taskbody_buffer)
@@ -2254,6 +2261,7 @@ def on_taskbody_dnd_data(textview, context, x, y, selectiondata, int_id, eventti
 class UserNote(gobject.GObject):
 	__gsignals__ = {
 		'dismissed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()),
+		'title-line-changed': (gobject.SIGNAL_RUN_LAST, gobject.TYPE_BOOLEAN, (gobject.TYPE_STRING,)),
 	}
 
 	xattr_cursor_position = 'user.textedit.cursor_position'
@@ -2317,6 +2325,7 @@ class UserNote(gobject.GObject):
 			self.textbuffer.disable_events()
 			self.textbuffer.reinit(text)
 			self.textbuffer.enable_events()
+			self.emit('title-line-changed', self.textbuffer.get_line(0))  # TODO not always changes here and changes not only here
 		else:
 			raise Exception("can not set task's text when not bound to a TextBuffer")
 	
@@ -2473,9 +2482,11 @@ def act_focus_current_task():
 	notes_notebook.current_taskbody_view.grab_focus()
 
 def act_close_current_task():
+	page_num = notes_notebook.get_current_page()
 	note = notes_notebook.current_note
 	if note is not None:
 		note.dismiss()
+	return page_num
 
 def act_new_task(*_X):
 	notes_notebook.new_page()
