@@ -1183,7 +1183,7 @@ def add_treeview_columns(treeview, columns):
 		tvc.connect('clicked', save_treeview_column_sort)
 
 def main_quit():
-	act_close_current_task()
+	notes_notebook.close_all_pages()
 	# execute outstanding timers
 	sys.stderr.write(_("Executing outstanding timed operations…")+'\n')
 	for iden in Timers.keys():
@@ -1481,7 +1481,7 @@ def process_tasklist():
 	tasklist.foreach(count_tags, AllTags)
 
 def load_task(task_file_nonprefixed, task_text):
-	page_num = act_close_current_task()
+	page_num = notes_notebook.close_current_page()
 	task_page = notes_notebook.new_page()
 	task = task_page.usernote
 	task.source_file_nonpfx = task_file_nonprefixed
@@ -1894,13 +1894,13 @@ def act_task_done(filepaths):
 		subdir, subfile = os.path.split(subpath)
 		newpath = find_nonexistent_file(os.path.join(NOTES_ARCHIVE_DIR, subdir), subfile)
 		ioQueue.put(('mkdir', [os.path.dirname(newpath)], _("saving note…"), None))
-		act_close_current_task()
+		notes_notebook.close_current_page()
 		ioQueue.put(('rename', [filepath, newpath], _("saving note…"), None))
 
 def act_task_delete(filepaths):
 	for filepath in filepaths:
 		if question(_("Really delete?")+'\n<tt>'+glib.markup_escape_text(filepath)+'</tt>', stock_yes=(None, gtk.STOCK_DELETE), stock_no=(None, gtk.STOCK_CANCEL), parent=main_win):
-			act_close_current_task()
+			notes_notebook.close_current_page()
 			ioQueue.put(('remove', [filepath], _("remove note…"), None))
 
 def make_tasklist_sortkey(cell, order):
@@ -2035,6 +2035,17 @@ class uNotebook(gtk.Notebook):
 		super(self.__class__, self).__init__()
 		self.connect('page-added', self.on_pages_changed)
 		self.connect('page-removed', self.on_pages_changed)
+		action_widgets = gtk.HBox()
+		close_tab_button = gtk.Button(stock=gtk.STOCK_CLOSE)
+		new_tab_button = gtk.Button(stock=gtk.STOCK_NEW)
+		close_tab_button.connect('clicked', lambda *X: self.close_current_page())
+		new_tab_button.connect('clicked', lambda *X: self.bring_page_in_foreground(self.new_page()))
+		action_widgets.pack_start(new_tab_button)
+		action_widgets.pack_start(close_tab_button)
+		
+		self.set_action_widget(action_widgets, gtk.PACK_END)
+		action_widgets.show_all()
+		self.popup_enable()
 	
 	@property
 	def current_page_widget(self):
@@ -2057,10 +2068,26 @@ class uNotebook(gtk.Notebook):
 	def on_pages_changed(self, *X):
 		self.set_show_tabs(self.get_n_pages() > 1)
 	
-	def close_tab_by_widget(self, widget):
+	def close_current_page(self):
+		page_num = self.get_current_page()
+		note = self.current_note
+		if note is not None:
+			note.dismiss()
+		return page_num
+	
+	def close_all_pages(self):
+		for page in self.page_widgets:
+			page.usernote.dismiss()
+	
+	def _close_tab_by_widget(self, widget):
 		page = self.page_num(widget)
 		if page != -1:
 			self.remove_page(page)
+	
+	def bring_page_in_foreground(self, page_widget):
+		page_num = self.page_num(page_widget)
+		if page_num != -1:
+			self.set_current_page(page_num)
 	
 	def new_page(self):
 		box = gtk.HBox()
@@ -2080,13 +2107,13 @@ class uNotebook(gtk.Notebook):
 		taskbody_view.connect('drag-data-received', on_taskbody_dnd_data)
 		
 		usernote = UserNote(taskbody_buffer)
-		usernote.connect('dismissed', lambda X: self.close_tab_by_widget(box))
+		usernote.connect('dismissed', lambda X: self._close_tab_by_widget(box))
 		usernote.connect('title-line-changed', lambda X, s: self.set_tab_label_text(box, s))
 		
 		calendar = Calendar()
 		calendar.connect('mark-added', lambda X, date, textbuffer: textbuffer.insert_line(date), taskbody_buffer)
 		calendar.connect('mark-removed', lambda X, date, textbuffer: textbuffer.remove_text_around_cursor(date), taskbody_buffer)
-
+		
 		taskbody_view.usernote = usernote
 		taskbody_view.calendar_widget = calendar
 		taskbody_buffer.calendar_widget = calendar
@@ -2122,12 +2149,6 @@ def on_taskbody_view_click(textview, event):
 
 def on_taskbody_view_menu(textview, menu):
 	pos = 0
-	
-	mi = ActionStockMenuItem(label=_("New task"), stock_id=gtk.STOCK_NEW, action=act_new_task)
-	menu.insert(mi, pos)
-	pos += 1
-	menu.insert(gtk.SeparatorMenuItem(), pos)
-	pos += 1
 	
 	has_selection = textview.get_buffer().get_has_selection()
 	pointed_word = textview.get_data('pointed-word')
@@ -2476,20 +2497,12 @@ def handle_tab_completion(event, callback):
 
 
 
-
-
 def act_focus_current_task():
 	notes_notebook.current_taskbody_view.grab_focus()
 
-def act_close_current_task():
-	page_num = notes_notebook.get_current_page()
-	note = notes_notebook.current_note
-	if note is not None:
-		note.dismiss()
-	return page_num
-
 def act_new_task(*_X):
-	notes_notebook.new_page()
+	page = notes_notebook.new_page()
+	notes_notebook.bring_page_in_foreground(page)
 
 
 HelpWindow = gtk.MessageDialog(None, gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_INFO, gtk.BUTTONS_OK)
@@ -2730,6 +2743,7 @@ add_key_binding(main_win, '<Control>t', lambda *X: act_focus_current_task())
 add_key_binding(main_win, '<Control>n', lambda *X: act_new_task())
 add_key_binding(main_win, '<Control><Shift>l', lambda *X: do_layout(LAYOUT[(LAYOUT.index(Props['layout/layout-set'])+1)%len(LAYOUT)]))
 add_key_binding(main_win, '<Control><Shift>w', lambda *X: notes_notebook.current_taskbody_view.toggle_wrap())
+add_key_binding(main_win, '<Control>w', lambda *X: notes_notebook.close_current_page())
 add_key_binding(main_win, 'F4', act_open_selected_tasks)
 add_key_binding(main_win, 'F1', lambda *X: (HelpWindow.hide(), HelpWindow.show_all()))  # hide and show raises the window most reliably
 main_win.connect('delete-event', lambda *X: main_quit())
