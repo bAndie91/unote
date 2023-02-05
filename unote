@@ -2078,7 +2078,7 @@ class uNotebook(gtk.Notebook):
 		if self.get_n_pages() > 1:
 			starting_page.hide()
 		else:
-			starting_page.show_all()
+			starting_page.show()
 	
 	def close_current_page(self):
 		page_num = self.get_current_page()
@@ -2139,7 +2139,7 @@ class uNotebook(gtk.Notebook):
 		box.taskbody_view = taskbody_view
 		box.usernote = usernote
 		
-		self.show_all()
+		box.show_all()
 		calendar.hide()
 		return box
 
@@ -2306,6 +2306,7 @@ class UserNote(gobject.GObject):
 		self.sighandler = {}
 		self.textbuffer = textbuffer
 		self.saved_cursor_position = None
+		self._saved_title = None
 	
 	@property
 	def source_file_pfx(self):
@@ -2340,9 +2341,16 @@ class UserNote(gobject.GObject):
 				del self.sighandler[signame]
 		self._textbuffer = textbuffer
 	
+	def detect_title_change(self):
+		title = self.textbuffer.get_line(0)
+		if self._saved_title != title:
+			self._saved_title = title
+			self.emit('title-line-changed', title)
+	
 	def on_text_changed(self, *X):
 		self.saved = False
 		format_taskbody(self.textbuffer)
+		self.detect_title_change()
 		self.auto_save()
 	
 	@property
@@ -2357,8 +2365,9 @@ class UserNote(gobject.GObject):
 		if self.textbuffer is not None:
 			self.textbuffer.disable_events()
 			self.textbuffer.reinit(text)
+			format_taskbody(self.textbuffer)
 			self.textbuffer.enable_events()
-			self.emit('title-line-changed', self.textbuffer.get_line(0))  # TODO not always changes here and changes not only here
+			self.detect_title_change()
 		else:
 			raise Exception("can not set task's text when not bound to a TextBuffer")
 	
@@ -2748,6 +2757,7 @@ tasklist_selection.connect('changed', on_tasklist_selection_change)
 
 starting_page = gtk.HBox()
 starting_page.pack_start(ActionStockButton(stock=gtk.STOCK_NEW, action=act_new_task), expand=False)
+starting_page.pack_start(ActionStockButton(stock=gtk.STOCK_CLOSE, action=lambda *X: notes_notebook.close_current_page()), expand=False)
 
 notes_notebook = uNotebook()
 completion_suggestions_box = CompletionSuggestionsBox()
