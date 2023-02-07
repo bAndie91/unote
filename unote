@@ -2079,6 +2079,7 @@ class uNotebook(gtk.Notebook):
 			starting_page.hide()
 		else:
 			starting_page.show()
+			self.update_single_unsaved_indicator()
 	
 	def close_current_page(self):
 		page_num = self.get_current_page()
@@ -2101,6 +2102,26 @@ class uNotebook(gtk.Notebook):
 		if page_num != -1:
 			self.set_current_page(page_num)
 	
+	def set_tab_label_text(self, page, text):
+		label = gtk.HBox(spacing=4)
+		if not page.usernote.saved:
+			label.pack_start(gtk.image_new_from_stock(gtk.STOCK_SAVE, gtk.ICON_SIZE_SMALL_TOOLBAR))
+		label.pack_start(gtk.Label(text))
+		self.set_tab_label(page, label)
+		label.show_all()
+		self.update_single_unsaved_indicator()
+	
+	def update_single_unsaved_indicator(self):
+		if self.get_n_pages() < 2:
+			note = self.current_note
+			if note and not note.saved:
+				starting_page_unsaved_indicator.show()
+			else:
+				starting_page_unsaved_indicator.hide()
+	
+	def update_tab_label(self, page):
+		self.set_tab_label_text(page, page.usernote.textbuffer.get_line(0))
+	
 	def new_page(self):
 		box = gtk.HBox()
 		taskbody_buffer = TextBuffer()
@@ -2121,6 +2142,7 @@ class uNotebook(gtk.Notebook):
 		usernote = UserNote(taskbody_buffer)
 		usernote.connect('dismissed', lambda X: self._close_tab_by_widget(box))
 		usernote.connect('title-line-changed', lambda X, s: self.set_tab_label_text(box, s))
+		usernote.connect('saved-state-changed', lambda X: self.update_tab_label(box))
 		
 		calendar = Calendar()
 		calendar.connect('mark-added', lambda X, date, textbuffer: textbuffer.insert_line(date), taskbody_buffer)
@@ -2133,12 +2155,12 @@ class uNotebook(gtk.Notebook):
 		scrolled_textview = ScrolledWidget(taskbody_view)
 		box.pack_start(scrolled_textview, expand=True)
 		box.pack_start(calendar, expand=False)
-		
-		self.append_page(box)
-		self.set_tab_reorderable(box, True)
+
 		box.taskbody_view = taskbody_view
 		box.usernote = usernote
 		
+		self.append_page(box)
+		self.set_tab_reorderable(box, True)
 		box.show_all()
 		calendar.hide()
 		return box
@@ -2295,6 +2317,7 @@ class UserNote(gobject.GObject):
 	__gsignals__ = {
 		'dismissed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()),
 		'title-line-changed': (gobject.SIGNAL_RUN_LAST, gobject.TYPE_BOOLEAN, (gobject.TYPE_STRING,)),
+		'saved-state-changed': (gobject.SIGNAL_RUN_FIRST, gobject.TYPE_NONE, ()),
 	}
 
 	xattr_cursor_position = 'user.textedit.cursor_position'
@@ -2302,7 +2325,7 @@ class UserNote(gobject.GObject):
 	def __init__(self, textbuffer):
 		super(self.__class__, self).__init__()
 		self.source_file_nonpfx = None
-		self.saved = None
+		self._saved = True
 		self.sighandler = {}
 		self.textbuffer = textbuffer
 		self.saved_cursor_position = None
@@ -2377,12 +2400,10 @@ class UserNote(gobject.GObject):
 	
 	@saved.setter
 	def saved(self, is_saved):
+		was_saved = self._saved
 		self._saved = is_saved
-		if is_saved:
-			tasklist_top_labels_left.remove_state('unsaved-indicator')
-		else:
-			tasklist_top_labels_left.add_state('unsaved-indicator', MarkupText("<span variant=\"smallcaps\" weight=\"bold\">"+_("not saved")+"</span>"))
-		# TODO: put indicator on tab label
+		if was_saved != is_saved:
+			self.emit('saved-state-changed')
 	
 	def save_cursor_position(self):
 		pos = self.textbuffer.cursor_pos
@@ -2525,6 +2546,7 @@ def act_focus_current_task():
 def act_new_task(*_X):
 	page = notes_notebook.new_page()
 	notes_notebook.bring_page_in_foreground(page)
+	act_focus_current_task()
 
 def focus_next_tab():
 	notes_notebook.set_current_page(notes_notebook.get_current_page()+1)
@@ -2755,9 +2777,11 @@ tasklist_selection = tasklist_view.get_selection()
 tasklist_selection.set_mode(gtk.SELECTION_MULTIPLE)
 tasklist_selection.connect('changed', on_tasklist_selection_change)
 
-starting_page = gtk.HBox()
+starting_page = gtk.HBox(spacing=4)
 starting_page.pack_start(ActionStockButton(stock=gtk.STOCK_NEW, action=act_new_task), expand=False)
 starting_page.pack_start(ActionStockButton(stock=gtk.STOCK_CLOSE, action=lambda *X: notes_notebook.close_current_page()), expand=False)
+starting_page_unsaved_indicator = gtk.image_new_from_stock(gtk.STOCK_SAVE, gtk.ICON_SIZE_BUTTON)
+starting_page.pack_start(starting_page_unsaved_indicator, expand=False)
 
 notes_notebook = uNotebook()
 completion_suggestions_box = CompletionSuggestionsBox()
@@ -2865,6 +2889,7 @@ def do_layout(layout):
 	
 	main_win.show_all()
 	completion_suggestions_box.hide()
+	starting_page_unsaved_indicator.hide()
 	Props['layout/layout-set'] = layout
 
 
