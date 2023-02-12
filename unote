@@ -1216,7 +1216,7 @@ def program_start(widget, event):
 	widget.disconnect(start_event_handle)
 	main_win.connect('configure-event', on_window_configure)
 	tasklist_loader.wake()
-	# load last opened task
+	# load last opened tasks
 	# FIXME: do it during it loads the tasks or when it finished
 	select_or_load_task_by_file(Props['history/last/opened-task/path'])
 
@@ -1238,7 +1238,7 @@ def select_or_load_task_by_file(task_file_nonprefixed):
 	else:
 		tasklist.foreach(find_task_by_file, data)
 		if data['text'] is not None:
-			load_task(task_file_nonprefixed, data['text'])
+			load_task_replace(task_file_nonprefixed, data['text'])
 
 class PropertyTree(dict):
 	def __init__(self, *args):
@@ -1486,17 +1486,21 @@ def process_tasklist():
 	AllTags.clear()
 	tasklist.foreach(count_tags, AllTags)
 
-def load_task(task_file_nonprefixed, task_text):
+def load_task_replace(task_file_nonprefixed, task_text):
 	page_num = notes_notebook.close_current_page()
 	task_page = notes_notebook.new_page()
+	load_task_in_page(task_page, task_file_nonprefixed, task_text)
+	
+	notes_notebook.set_current_page(notes_notebook.page_num(task_page))
+	notes_notebook.reorder_child(task_page, page_num)
+
+def load_task_in_page(task_page, task_file_nonprefixed, task_text):
 	task = task_page.usernote
 	task.source_file_nonpfx = task_file_nonprefixed
 	task.text = task_text
 	task.saved = True
 	task.restore_cursor_position()
 	# TODO: scroll to cursor
-	notes_notebook.set_current_page(notes_notebook.page_num(task_page))
-	notes_notebook.reorder_child(task_page, page_num)
 	
 	Props['history/last/opened-task/path'] = task_file_nonprefixed
 	taskhistorylist.push(task_file_nonprefixed)
@@ -1577,9 +1581,17 @@ def format_taskbody(textbuffer):
 
 def on_tasklist_selection_change(selection):
 	model, iterpaths = selection.get_selected_rows()
+	selected_files = []
 	for iterpath in iterpaths:
 		row = model[iterpath]
-		load_task(strip_path_prefix(row['file']), row['raw_text'])
+		path_nonpfx = strip_path_prefix(row['file'])
+		selected_files.append(path_nonpfx)
+		if not notes_notebook.is_file_opened(path_nonpfx):
+			page = notes_notebook.new_page()
+			load_task_in_page(page, path_nonpfx, row['raw_text'])
+	for page in notes_notebook.page_widgets:
+		if page.usernote.source_file_nonpfx is not None and page.usernote.source_file_nonpfx not in selected_files:
+			page.usernote.dismiss()
 
 def timer_once(sec, func, func_args=(), keep_old_schedules=False, iden=None):
 	if iden is None:
@@ -2062,7 +2074,9 @@ class uNotebook(gtk.Notebook):
 	@property
 	def page_widgets(self):
 		for n in range(self.get_n_pages()):
-			yield self.get_nth_page(n)
+			widget = self.get_nth_page(n)
+			if widget is not None:
+				yield widget
 	
 	@property
 	def current_taskbody_view(self):
@@ -2121,6 +2135,12 @@ class uNotebook(gtk.Notebook):
 	
 	def update_tab_label(self, page):
 		self.set_tab_label_text(page, page.usernote.textbuffer.get_line(0))
+	
+	def is_file_opened(self, path_nonpfx):
+		for page in self.page_widgets:
+			if page.usernote.source_file_nonpfx == path_nonpfx:
+				return True
+		return False
 	
 	def new_page(self):
 		box = gtk.HBox()
@@ -2560,6 +2580,7 @@ HelpWindow = gtk.MessageDialog(None, gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE
 HelpWindow.set_markup("""<b>Ctrl-F</b>, <b>Ctrl-L</b> focus on search box
 <b>Ctrl-T</b> focus on the note
 <b>Ctrl-N</b> new note
+<b>Ctrl-W</b> close note
 
 <b>Ctrl-S</b> save current search term in quick search list
 <b>F4</b> open selected note externally
