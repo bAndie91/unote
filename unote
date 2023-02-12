@@ -1580,6 +1580,7 @@ def format_taskbody(textbuffer):
 		calendar.hide()
 
 def on_tasklist_selection_change(selection):
+	# open notes which are selected
 	model, iterpaths = selection.get_selected_rows()
 	selected_files = []
 	for iterpath in iterpaths:
@@ -1589,9 +1590,21 @@ def on_tasklist_selection_change(selection):
 		if not notes_notebook.is_file_opened(path_nonpfx):
 			page = notes_notebook.new_page()
 			load_task_in_page(page, path_nonpfx, row['raw_text'])
-	for page in notes_notebook.page_widgets:
+	
+	# close notes which are not selected
+	for page in list(notes_notebook.page_widgets):
 		if page.usernote.source_file_nonpfx is not None and page.usernote.source_file_nonpfx not in selected_files:
 			page.usernote.dismiss()
+			
+	# focus that note which is currently under the cursor
+	iterpath, Xcol = selection.get_tree_view().get_cursor()
+	if iterpath is not None:
+		row = model[iterpath]
+		path_nonpfx = strip_path_prefix(row['file'])
+		for page in list(notes_notebook.page_widgets):
+			if page.usernote.source_file_nonpfx == path_nonpfx:
+				notes_notebook.bring_page_in_foreground(page)
+				break
 
 def timer_once(sec, func, func_args=(), keep_old_schedules=False, iden=None):
 	if iden is None:
@@ -2122,6 +2135,7 @@ class uNotebook(gtk.Notebook):
 			label.pack_start(gtk.image_new_from_stock(gtk.STOCK_SAVE, gtk.ICON_SIZE_SMALL_TOOLBAR))
 		label.pack_start(gtk.Label(text))
 		self.set_tab_label(page, label)
+		self.set_menu_label_text(page, text)
 		label.show_all()
 		self.update_single_unsaved_indicator()
 	
