@@ -45,6 +45,8 @@ try:
 except IndexError:
 	NOTES_DIR = os.path.expanduser('~/Notes')
 	do_create_notes_dir = True
+NOTES_DIR = NOTES_DIR.rstrip(os.path.sep)
+NOTES_ARCHIVE_DIR = os.path.join(NOTES_DIR, '.Archive').rstrip(os.path.sep)
 NOTESFILE_EXCLUDES = ['*~', '*.bak']
 
 RE_MONTHNAMES = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
@@ -53,10 +55,6 @@ RE_DATE = r'\b([0-9]{4})-(0?[1-9]|1[0-2]|' + RE_MONTHNAMES + r')-(' + RE_DAYSOFM
 # define what counts as a word in task texts and search query text:
 RE_TASKBODY_WORD = r'[#\w-]'
 
-
-NOTES_DIR = NOTES_DIR.rstrip(os.path.sep)
-NOTES_ARCHIVE_DIR = os.path.join(NOTES_DIR, '.Archive')
-NOTES_ARCHIVE_DIR = NOTES_ARCHIVE_DIR.rstrip(os.path.sep)
 
 
 def getsizeofrecursive(x):
@@ -1196,7 +1194,7 @@ def main_quit():
 		glib.source_remove(Timers[iden]['handle'])
 		timer_call(iden, Timers[iden]['func'], Timers[iden]['args'])
 
-	ioQueue.put(('exit', [], None, None))
+	ioQueue.put(ioTask('exit'))
 	# quit gtk loop eventually
 	glib.timeout_add(100, main_quit_exit)
 
@@ -1273,8 +1271,8 @@ class PropertyTree(dict):
 			propvalue = str(propvalue)
 			if self.savedprops.get(propname) != propvalue:
 				propfile = os.path.join(xdg.BaseDirectory.save_config_path(APPNAME), 'prop', propname)
-				ioQueue.put(('mkdir', [os.path.dirname(propfile)], _("saving config…"), None))
-				ioQueue.put(('write', [propfile, propvalue], _("saving config…"), None))
+				ioQueue.put(ioTask('mkdir', [os.path.dirname(propfile)], _("saving config…")))
+				ioQueue.put(ioTask('write', [propfile, propvalue], _("saving config…")))
 				self.savedprops[propname] = propvalue
 
 class HistoryList(object):
@@ -1924,15 +1922,15 @@ def act_task_done(filepaths):
 		subpath = strip_path_prefix(filepath)
 		subdir, subfile = os.path.split(subpath)
 		newpath = find_nonexistent_file(os.path.join(NOTES_ARCHIVE_DIR, subdir), subfile)
-		ioQueue.put(('mkdir', [os.path.dirname(newpath)], _("saving note…"), None))
+		ioQueue.put(ioTask('mkdir', [os.path.dirname(newpath)], _("moving note…")))
 		notes_notebook.close_current_page()
-		ioQueue.put(('rename', [filepath, newpath], _("saving note…"), None))
+		ioQueue.put(ioTask('rename', [filepath, newpath], _("moving note…")))
 
 def act_task_delete(filepaths):
 	for filepath in filepaths:
 		if question(_("Really delete?")+'\n<tt>'+glib.markup_escape_text(filepath)+'</tt>', stock_yes=(None, gtk.STOCK_DELETE), stock_no=(None, gtk.STOCK_CANCEL), parent=main_win):
 			notes_notebook.close_current_page()
-			ioQueue.put(('remove', [filepath], _("remove note…"), None))
+			ioQueue.put(ioTask('remove', [filepath], _("removing note…")))
 
 def make_tasklist_sortkey(cell, order):
 	"""let the alphabetical cells always first, numeric cells second,
@@ -2360,6 +2358,7 @@ class UserNote(gobject.GObject):
 		super(self.__class__, self).__init__()
 		self.source_file_nonpfx = None
 		self._saved = True
+		self.should_save_path = None
 		self.sighandler = {}
 		self.textbuffer = textbuffer
 		self.saved_cursor_position = None
@@ -2398,10 +2397,13 @@ class UserNote(gobject.GObject):
 				del self.sighandler[signame]
 		self._textbuffer = textbuffer
 	
+	@property
+	def title(self):
+		return self.textbuffer.get_line(0)
+	
 	def detect_title_change(self):
-		title = self.textbuffer.get_line(0)
-		if self._saved_title != title:
-			self._saved_title = title
+		if self._saved_title != self.title:
+			self._saved_title = self.title
 			self.emit('title-line-changed', title)
 	
 	def on_text_changed(self, *X):
@@ -2442,7 +2444,7 @@ class UserNote(gobject.GObject):
 	def save_cursor_position(self):
 		pos = self.textbuffer.cursor_pos
 		if self.saved_cursor_position != pos and self.source_file_pfx is not None and os.path.exists(self.source_file_pfx):
-			ioQueue.put(('setxattr', [self.source_file_pfx, self.xattr_cursor_position, str(pos)], _("saving state…"), None))
+			ioQueue.put(ioTask('setxattr', [self.source_file_pfx, self.xattr_cursor_position, str(pos)], _("saving state…")))
 	
 	def restore_cursor_position(self):
 		try:
@@ -2464,21 +2466,51 @@ class UserNote(gobject.GObject):
 		self.emit('dismissed')
 		# TODO: last save
 	
+	@property
+	def source_file_path_ideal(self):
+		"the note should be saved in this file, but not neccessarily is. see self.source_file_pfx to get the path where was it saved last time."
+		return add_path_prefix(filenameize(self.title) + '.txt')
+	
 	def auto_save(self):
-		# TODO review
-		if self.source_file_pfx is None:
-			# don't save new task until at least one line is entered,
-			# and generate file name from the first line
-			m = re.search(r'^\s*(.+?)\n', self.text)
-			if not m: return
-			first_line = m.group(1)
-			filepath = find_nonexistent_file(NOTES_DIR, filenameize(first_line) + '.txt')
+		# don't save new task until at least one line is entered,
+		match = re.search(r'^\s*.+\n', self.text)
+		if not match: return
+		
+		if self.source_file_pfx == self.source_file_path_ideal:
+			pass
 		else:
-			# save but not too frequently
-			# TODO paced_action
-			ioQueue.put(('write', [self.source_file_pfx, self.text], _("saving note…"), self.save_file_cb))
+			# generate file name from the first line
+			# avoid already existing file names
+			while True:
+				if not os.path.exists(self.source_file_path_ideal): break
+				
+				# append a "(N)" number to the title line:
+				match = re.match(r'.*( \((\d+)\))$', self.title)
+				if match:
+					startoffset = match.start(1)
+					length = len(match.group(0))
+					num = int(match.group(2))
+				else:
+					startoffset = len(self.title)
+					length = 0
+					num = 1
+				replacement = ' (%d)' % num+1
+				self.textbuffer.replace_text(startoffset, length, replacement)
+		
+		if self.source_file_pfx is not None and self.source_file_path_ideal != self.source_file_pfx:
+			ioQueue.put(ioTask('rename', [self.source_file_pfx, self.source_file_path_ideal], _("renaming note…"), self.rename_cb))
+			return
+		
+		self.should_save_path = self.source_file_path_ideal
+		self._schedule_save()
+	
+	def _schedule_save(self):
+		# save but not too frequently
+		# TODO paced_action
+		ioQueue.put(ioTask('write', [self.should_save_path, self.text], _("saving note…"), self.save_file_cb))
 		
 		# update task in the tasklist
+		# TODO REVIEW
 		try:
 			treeiter = get_tasklist_treeiter_by_file(self.source_file_pfx)
 		except KeyError:
@@ -2487,11 +2519,15 @@ class UserNote(gobject.GObject):
 		else:
 			update_task_in_list(tasklist, treeiter, task_text=self.text)
 	
+	def rename_cb(self, stage, io_task, exception=None):
+		if stage == BGTASK_STATE_FINISH:
+			self.should_save_path = io_task.params[1]
+			self._schedule_save()
+	
 	def save_file_cb(self, stage, io_task, exception=None):
 		if stage == BGTASK_STATE_FINISH:
 			self.saved = True
-			if self.source_file_pfx is None:
-				self.source_file_pfx = io_task[1][0]
+			self.source_file_pfx = io_task.params[0]
 			# update task in the tasklist
 			try:
 				treeiter = get_tasklist_treeiter_by_file(self.source_file_pfx)
@@ -2598,9 +2634,13 @@ HelpWindow.set_markup("""<b>Ctrl-F</b>, <b>Ctrl-L</b> focus on search box
 
 <b>Ctrl-S</b> save current search term in quick search list
 <b>F4</b> open selected note externally
-<b>Ctrl-Shift-W</b> toggle text wrap mode
 <b>Ctrl-Shift-L</b> change window layout
 <b>Ctrl-Q</b> quit
+
+<b>Ctrl-Shift-W</b> toggle text wrap mode
+<b>Ctrl-Enter</b> open link under the cursor
+<b>Ctrl-Enter</b> choose the currently highlighted tag
+<b>Tab</b>/<b>Shift-Tab</b> highlight next/previous tag
 
 <b>Ctrl-P</b> bring back previous search term
 <b>Ctrl-Shift-P</b> bring back next search term
@@ -2627,25 +2667,31 @@ BGTASK_STATE_START, BGTASK_STATE_FINISH, BGTASK_STATE_ERROR = range(3)
 
 def on_io_work(state, task, exception=None):
 	gtk.threads_enter()
-	Xoper, Xparams, message, user_callback = task
-	if user_callback is None:
-		user_callback = lambda *X: None
+	if task.user_callback is None:
+		task.user_callback = lambda *X: None
 	
 	if state == BGTASK_STATE_START:
-		tasklist_top_labels_left.add_state(message)
+		tasklist_top_labels_left.add_state(task.pending_message)
 		user_callback(state, task)
 	elif state == BGTASK_STATE_FINISH:
-		tasklist_top_labels_left.remove_state(message)
+		tasklist_top_labels_left.remove_state(task.pending_message)
 		user_callback(state, task)
 	elif state == BGTASK_STATE_ERROR:
-		tasklist_top_labels_left.remove_state(message)
+		tasklist_top_labels_left.remove_state(task.pending_message)
 		if not user_callback(state, task, exception):
 			traceback.print_exception(*exception)
 			display_error(exception[1])
 	else:
 		gtk.threads_leave()
-		assert False, "task state is invalid"
+		assert False, "task state is invalid: %d" % state
 	gtk.threads_leave()
+
+class ioTask(object):
+	def __init__(self, operation, params=[], pending_message=None, user_callback=None):
+		self.operation = operation
+		self.params = params
+		self.pending_message = pending_message
+		self.user_callback = user_callback
 
 class ioWorker(threading.Thread):
 	def __init__(self, queue, status_callback):
@@ -2656,13 +2702,12 @@ class ioWorker(threading.Thread):
 	def run(self):
 		while True:
 			task = self._queue.get()
-			oper, params = task[0:2]
-			if oper == 'exit':
+			if task.operation == 'exit':
 				self._queue.task_done()
 				break
 			self._status_callback(BGTASK_STATE_START, task)
 			try:
-				getattr(self, 'op_'+oper)(*params)
+				getattr(self, 'op_'+task.operation)(*task.params)
 			except:
 				self._status_callback(BGTASK_STATE_ERROR, task, sys.exc_info())
 			else:
