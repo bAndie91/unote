@@ -2397,20 +2397,20 @@ class UserNote(gobject.GObject):
 				del self.sighandler[signame]
 		self._textbuffer = textbuffer
 	
-	@property
-	def title(self):
-		return self.textbuffer.get_line(0)
-	
-	def detect_title_change(self):
-		if self._saved_title != self.title:
-			self._saved_title = self.title
-			self.emit('title-line-changed', title)
-	
 	def on_text_changed(self, *X):
 		self.saved = False
 		format_taskbody(self.textbuffer)
 		self.detect_title_change()
 		self.auto_save()
+	
+	def detect_title_change(self):
+		if self._saved_title != self.title:
+			self._saved_title = self.title
+			self.emit('title-line-changed', self.title)
+	
+	@property
+	def title(self):
+		return self.textbuffer.get_line(0)
 	
 	@property
 	def text(self):
@@ -2499,6 +2499,7 @@ class UserNote(gobject.GObject):
 		
 		if self.source_file_pfx is not None and self.source_file_path_ideal != self.source_file_pfx:
 			ioQueue.put(ioTask('rename', [self.source_file_pfx, self.source_file_path_ideal], _("renaming note…"), self.rename_cb))
+			# TODO: wait on rename_cb
 			return
 		
 		self.should_save_path = self.source_file_path_ideal
@@ -2529,6 +2530,7 @@ class UserNote(gobject.GObject):
 			self.saved = True
 			self.source_file_pfx = io_task.params[0]
 			# update task in the tasklist
+			# TODO REVIEW
 			try:
 				treeiter = get_tasklist_treeiter_by_file(self.source_file_pfx)
 			except KeyError:
@@ -2537,8 +2539,11 @@ class UserNote(gobject.GObject):
 			else:
 				update_task_in_list(tasklist, treeiter, task_file=self.source_file_pfx)
 		elif stage == BGTASK_STATE_ERROR:
-			# TODO: re-open note if delayed save failed
-			pass
+			# reopen the note if save was failed after dismissal
+			if self.textbuffer is None:
+				page = notes_notebook.new_page()
+				source_file_pfx = io_task.params[0]
+				load_task_in_page(page, source_file_pfx, self.text)
 
 
 def update_suggestions_by_taskbody_word(word, pos):
@@ -2672,13 +2677,13 @@ def on_io_work(state, task, exception=None):
 	
 	if state == BGTASK_STATE_START:
 		tasklist_top_labels_left.add_state(task.pending_message)
-		user_callback(state, task)
+		task.user_callback(state, task)
 	elif state == BGTASK_STATE_FINISH:
 		tasklist_top_labels_left.remove_state(task.pending_message)
-		user_callback(state, task)
+		task.user_callback(state, task)
 	elif state == BGTASK_STATE_ERROR:
 		tasklist_top_labels_left.remove_state(task.pending_message)
-		if not user_callback(state, task, exception):
+		if not task.user_callback(state, task, exception):
 			traceback.print_exception(*exception)
 			display_error(exception[1])
 	else:
