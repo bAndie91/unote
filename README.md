@@ -3,13 +3,13 @@
 
 # Goals
 
-- Dead simple. Include features only which significantly helps productivity.
+- Dead-simple. Include features only which help productivity.
 - no distracting features - let the user focus on the actual task, not on organizing his todo list all the day
-- created respecting the author's preferences
-- mimic old school paper-and-pen note taking process with the ease of search capability
+- respecting the author's preferences
+- mimic old-school paper-and-pen note taking process with the ease of search capability
 - "Get Things Done" mindset
-- based on plain text files - you can access your notes even without µNote; no vendor-lock
-- optimize for keyboard
+- based on plain text files - you can access your notes even without µNote: no vendor-lock
+- optimized for keyboard
 
 # Parts
 
@@ -20,20 +20,27 @@
 
 # Features
 
-- Notes
-  - each file is a note, 
-  - files loaded from a base directory recursively (default `~/Notes`)
+- Notes/Tasks
+  - each file is a note
+  - files loaded from a base directory recursively (default `~/Notes`, dot-folders ignored)
+  - Title is the first line
+  - Created Date is file's atime (assuming a filesystem with the popular `noatime` mount option)
+  - Updated Date is file's mtime
 - Auto Save
   - don't worry about saving often or where to save
-  - it's an old legacy behaviur to make user save his work, at the time when saving was an expensive operation and it was not affordable to save, say, after each typed word. but today it's feasible. µNote saves the note you're editing per 5 sec. so if it crashes only 5 sec effort gets lost.
-  - save window layout, panel sizes, input fields' content, table columns' order, sort order, cursor position
+  - Software used to make user save his work; it was at a time when saving was an expensive operation 
+  and it was not affordable to save, say, after each typed word. 
+  But today it's feasible. Not only in programms with web frontend.
+  µNote saves the note you're editing in every 5 sec. 
+  so if it crashes, only so little effort gets lost.
+  - preserves window layout, panel sizes, input fields' content, table columns' order, sort order, cursor position
 - Tags
-  - any word starting with hashmark in the note's text, eg. `#grocery` can be used as keyword or tag
+  - any word starting with hashmark in the note's text, eg. `#grocery` is a tag
   - Tag Completion
     - when you're typing a tag in the search box or in the task text, a list of options pops up
     - walk on the list by <kbd>Tab</kbd> and <kbd>Shift-Tab</kbd>, choose one by <kbd>Ctrl-Enter</kbd>
 - Note/Task Editor
-  - it does not want to be a rich text editor, more like a physical sticky note
+  - it does not want to be a rich text editor (more like a physical sticky note, but only text input a.t.m.)
   - Text formatting
     - head line is always big font
     - `*bold*` → **bold**
@@ -46,24 +53,27 @@
       - markers: `✓` `✔` `✗` `✘` `DONE` `WONTFIX` `OBSOLETED` `[DONE]` `[WONTFIX]` `[OBSOLETED]`
     - `http://link` → [http://link](http://link) (for any url scheme)
   - `date:YYYY-MM-DD` and `due:YYYY-MM-DD` keywords 
-    - trigger a calendar widget to pop up 
-    - are shown in the Task List
+    - entering `date:` or `due:` triggers a calendar widget to show up
+    - date and due date are shown in the Task List table
+    - interpret date field by any sematics you like, eg. "when this task needs attention the soonest?"
   - Undo stack
-    - limited not by steps but by memory size of steps' diff
+    - limited not by the number of steps but by the memory size it takes to store diffs
 - Note/Task List
-  - order by Date, Due Date, Created or Updated Date
+  - order by Title, Date, Due Date, Created Date, or Updated Date
 - Search/Filter field
   - search in notes' content
     - narrow search (logical AND) : `#garden #water`
     - negation, everything after "NOT" or "!" are negative keywords: `#house #maintenance NOT #kitchen #bath` meaning "house and maintenance but not kitchen nor bath"
     - union two or more searches (logical OR) : `#garden, #house, #street`
   - smart-case search, i.e. case-insensitive when the complete word is lower-case, otherwise search case-sensitively
-  - filter as you type
-  - hit Enter to put current search term on history, recall with <kbd>Ctrl-P</kbd> and <kbd>Ctrl-Shift-P</kbd>
+  - filters as you type
+  - hit Enter to put current search term in history, 
+    - recall them with <kbd>Ctrl-P</kbd> and <kbd>Ctrl-Shift-P</kbd>
 - Quick Search
   - there is a list of saved search (filter) expressions
-  - you can organize it in tree, change order
-  - select multiple to search notes which match all the filter expressions (Conjunct Search) or any of them (Union Search)
+  - you can organize it in tree, change order of items
+  - select multiple item to search notes which match all the filter expressions (Conjunct Search) 
+  or any of them (Union Search)
   - useful to organize tasks in category/project/priority by their respecting tags
 
 # Keybinding
