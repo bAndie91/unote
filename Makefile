@@ -25,10 +25,12 @@ install: /usr/bin/unote /usr/share/applications/uNote.desktop /usr/share/menu/uN
 	install -m 0644 $< $@
 
 /usr/share/doc/uNote/VERSION: | /usr/share/doc/uNote
-	git describe --tags > $@
+	git describe --tags > $@~
+	mv $@~ $@
 
 /usr/share/doc/uNote/COMMIT: | /usr/share/doc/uNote
-	git show -s --format=%H > $@
+	git show -s --format=%H > $@~
+	mv $@~ $@
 
 uninstall:
 	rm /usr/share/applications/uNote.desktop
