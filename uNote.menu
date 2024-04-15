@@ -1,4 +1,4 @@
-?package(uNote):needs="X11" section="Applications/Project Management"\
+?package(local.unote):needs="X11" section="Applications/Project Management"\
   icon="/usr/share/icons/mate/24x24/apps/accessories-text-editor.png" \
   title="uNote" longtitle="uNote Personal Note Taking" \
   command="/usr/bin/unote"
