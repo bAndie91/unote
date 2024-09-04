@@ -44,6 +44,7 @@ NOTESFILE_EXCLUDES = ['*~', '*.bak']
 RE_MONTHNAMES = r'jan|febr?|marc?|apr|may|jun|jul|aug|sept?|oct|nov|dec'
 RE_DAYSOFMONTH = r'0?[1-9]|[12][0-9]|3[01]'
 RE_DATE = r'\b([0-9]{4})-(0?[1-9]|1[0-2]|' + RE_MONTHNAMES + r')-(' + RE_DAYSOFMONTH + r')\b'
+RE_INCLUDE_EXCLUDE_SEP = r'\s*(?:NOT|!)\s*'
 # define what counts as a word in task texts and search query text:
 taskbody_word_re = r'[#\w-]'
 
@@ -1939,7 +1940,7 @@ def tasklist_filterer_with_custom_query(model, treeiter, query):
 			if query_alternative == '':
 				continue
 			alternative_match = True
-			query_clauses = re.split(r'(?:\bNOT\b|!)', query_alternative, 1, re.I)
+			query_clauses = re.split(RE_INCLUDE_EXCLUDE_SEP, query_alternative, 1, re.I)
 			if len(query_clauses) == 1:
 				query_positive = query_clauses[0]
 				query_negative = ''
@@ -2113,6 +2114,9 @@ def on_taskbody_view_menu(Xtextview, menu):
 		mi = ActionStockMenuItem(label=_("Refine Search"), stock_id=gtk.STOCK_FIND, action=act_refine_search)
 		menu.insert(mi, pos)
 		pos += 1
+		mi = ActionStockMenuItem(label=_("Exclude Term"), stock_id=gtk.STOCK_REMOVE, action=act_exclude_term)
+		menu.insert(mi, pos)
+		pos += 1
 	if RuntimeData.get('loaded-task-file') is not None:
 		opened_file = add_path_prefix(RuntimeData.get('loaded-task-file'))
 		mi = ActionStockMenuItem(label=_("Done this task"), stock_id=gtk.STOCK_APPLY, action=lambda Xwidget, opened_file: act_task_done([opened_file]), action_userdata=(opened_file,))
@@ -2143,6 +2147,18 @@ def act_search_text(*X):
 	searchboxhistory.push(searchbox.text)
 def act_refine_search(*X):
 	searchbox.text += ' ' + get_taskbody_selected_or_pointed_text()
+	searchboxhistory.push(searchbox.text)
+def act_exclude_term(*X):
+	term = get_taskbody_selected_or_pointed_text()
+	terms = re.split(RE_INCLUDE_EXCLUDE_SEP, searchbox.text, 1, re.I)
+	if len(terms) > 1:
+		positive, negative = terms[:]
+	else:
+		positive = searchbox.text
+		negative = ''
+	negative_terms = negative.split()
+	if term not in negative_terms: negative_terms.append(term)
+	searchbox.text = positive + ' NOT ' + ' '.join(negative_terms)
 	searchboxhistory.push(searchbox.text)
 
 class KeyDetector(object):
