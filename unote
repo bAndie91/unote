@@ -1428,10 +1428,10 @@ def month_name_to_number(m):
 
 def find_markup_positions(text, markupname):
 	def find_coderanges(text):
-		# lines between 2 set of triple backticks, and
-		# words embraced by backticks
+		# lines between 2 occurrance of triple backticks, and
+		# words bracketed in backticks
 		# (allow to escape first backtick with: r'(?<!\\)(?:\\\\)*`(.*?(?<!\\)(?:\\\\)*)`')
-		for regex in r'^```[^\n]*\n(.*?)(?<=\n)```', r'(?<!\w)`([^\n]*?(?<!\\)(?:\\\\)*)`(?!\w)':
+		for regex in r'^\s*```[^\n]*\n(.*?)(?<=\n)\s*```', r'(?<!\w)`([^\n]*?(?<!\\)(?:\\\\)*)`(?!\w)':
 			for match in re.finditer(regex, text, re.S|re.M):
 				yield match.start(1), match.end(1), []
 	if markupname == 'headline':
